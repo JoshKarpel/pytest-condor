@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import List, Dict, Mapping, Optional
+from typing import List, Dict, Mapping, Optional, Callable
 
 import logging
 
@@ -49,32 +49,41 @@ DEFAULT_PARAMS = {
 }
 
 
-def skip_if_master_not_alive(func):
-    @functools.wraps(func)
-    def wrapper(self, *args, **kwargs):
-        if not self.master_is_alive:
-            logger.debug(
-                "condor_master for {} is not alive, skipping call to {}".format(
-                    self, func.__name__
+def master_is_not_alive(self) -> bool:
+    return not self.master_is_alive
+
+
+def condor_is_ready(self) -> bool:
+    return self.condor_is_ready
+
+
+def condor_master_was_started(self) -> bool:
+    return self.condor_master is not None
+
+
+def skip_if(condition: Callable[["Condor"], bool]):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(self, *args, **kwargs):
+            if condition(self):
+                logger.debug(
+                    "Skipping call to {} for {} because {} was True".format(
+                        func.__name__, self, condition.__name__
+                    )
                 )
-            )
-            return
+                return
 
-        return func(self, *args, **kwargs)
+            return func(self, *args, **kwargs)
 
-    return wrapper
+        return wrapper
+
+    return decorator
 
 
 class Condor:
     def __init__(
-        self,
-        release_dir: Path,
-        local_dir: Path,
-        config: Mapping[str, str] = None,
-        raw_config: str = None,
+        self, local_dir: Path, config: Mapping[str, str] = None, raw_config: str = None
     ):
-        self.release_dir = release_dir
-
         self.local_dir = local_dir
 
         self.execute_dir = self.local_dir / "execute"
@@ -91,15 +100,16 @@ class Condor:
         self.raw_config = raw_config or ""
 
         self.condor_master = None
+        self.condor_is_ready = False
 
     def __repr__(self):
         return "{}(local_dir = {})".format(self.__class__.__name__, self.local_dir)
 
     @property
-    def master_is_alive(self):
+    def master_is_alive(self) -> bool:
         return self.condor_master is not None and self.condor_master.returncode is None
 
-    def __enter__(self):
+    def __enter__(self) -> "Condor":
         self._start()
 
         return self
@@ -115,12 +125,12 @@ class Condor:
             self._write_config()
             self._start_condor()
             self._wait_for_ready()
-        except BaseException as e:
+        except BaseException:
             logger.exception(
-                "Encountered error during setup, cleaning up and then aborting!"
+                "Encountered error during setup of {}, cleaning up!".format(self)
             )
             self._cleanup()
-            sys.exit(1)
+            raise
 
         logger.info("Started {}".format(self))
 
@@ -137,7 +147,8 @@ class Condor:
             logger.debug("Created dir {}".format(dir))
 
     def _write_config(self):
-        # todo: how to ensure that this always hits the package-install config?
+        # TODO: how to ensure that this always hits the right config?
+        # TODO: switch to -summary instead of -write:up
         write = run_command(
             ["condor_config_val", "-write:up", self.config_file.as_posix()], echo=False
         )
@@ -154,13 +165,13 @@ class Condor:
         ]
 
         base_config = {
-            "RELEASE_DIR": self.release_dir.as_posix(),
             "LOCAL_DIR": self.local_dir.as_posix(),
             "EXECUTE": self.execute_dir.as_posix(),
             "LOCK": self.lock_dir.as_posix(),
             "LOG": self.log_dir.as_posix(),
             "RUN": self.run_dir.as_posix(),
             "SPOOL": self.spool_dir.as_posix(),
+            "STARTD_DEBUG": "D_FULLDEBUG D_COMMAND",
         }
 
         param_lines += ["#", "# BASE PARAMS", "#"]
@@ -179,6 +190,7 @@ class Condor:
             f.write("\n".join(param_lines))
         logger.debug("Wrote config file for {} to {}".format(self, self.config_file))
 
+    @skip_if(condor_master_was_started)
     def _start_condor(self):
         with SetCondorConfig(self.config_file):
             self.condor_master = subprocess.Popen(
@@ -188,6 +200,7 @@ class Condor:
                 "Started condor_master (pid {})".format(self.condor_master.pid)
             )
 
+    @skip_if(condor_is_ready)
     def _wait_for_ready(self, timeout=120, check_delay=10, dump_logs_if_fail=False):
         unready_daemons = set(
             self.run_command(
@@ -203,11 +216,22 @@ class Condor:
         start = time.time()
         while time.time() - start < timeout:
             time.sleep(check_delay)
+            time_to_give_up = int(timeout - (time.time() - start))
+
+            # if the master log does not exist yet, we can't use condor_who
+            if not self.master_log.exists():
+                logger.debug(
+                    "MASTER_LOG at {} does not yet exist for {} (will give up in {} seconds)".format(
+                        self.master_log, self, time_to_give_up
+                    )
+                )
+                continue
 
             who = self.run_command(["condor_who", "-quick"], echo=False)
             who_ad = dict(kv.split(" = ") for kv in who.stdout.splitlines())
 
             if who_ad["IsReady"] == "true":
+                self.condor_is_ready = True
                 return
 
             for k, v in who_ad.items():
@@ -216,9 +240,7 @@ class Condor:
 
             logger.debug(
                 "{} is waiting for daemons to be ready (will give up in {} seconds): {}".format(
-                    self,
-                    int(timeout - (time.time() - start)),
-                    " ".join(sorted(unready_daemons)),
+                    self, time_to_give_up, " ".join(sorted(unready_daemons))
                 )
             )
             for d in sorted(unready_daemons):
@@ -244,7 +266,7 @@ class Condor:
 
         logger.info("Cleaned up {}".format(self))
 
-    @skip_if_master_not_alive
+    @skip_if(master_is_not_alive)
     def _condor_off(self):
         off = self.run_command(
             ["condor_off", "-daemon", "master"], timeout=30, echo=False
@@ -261,7 +283,7 @@ class Condor:
 
         logger.debug("condor_off succeeded: {}".format(off.stdout))
 
-    @skip_if_master_not_alive
+    @skip_if(master_is_not_alive)
     def _wait_for_master_to_terminate(self, kill_after=60, timeout=120):
         logger.debug(
             "Waiting for condor_master (pid {}) to terminate".format(
@@ -285,6 +307,8 @@ class Condor:
                 )
 
             if elapsed > kill_after and not killed:
+                # TODO: in this path, we should also kill the other daemons
+                # TODO: we can find their pids by reading the master log
                 self._kill_condor_master()
                 killed = True
 
@@ -301,7 +325,7 @@ class Condor:
             )
         )
 
-    @skip_if_master_not_alive
+    @skip_if(master_is_not_alive)
     def _terminate_condor_master(self):
         if not self.master_is_alive:
             return
@@ -313,7 +337,7 @@ class Condor:
             )
         )
 
-    @skip_if_master_not_alive
+    @skip_if(master_is_not_alive)
     def _kill_condor_master(self):
         self.condor_master.kill()
         logger.debug(
@@ -331,6 +355,32 @@ class Condor:
         with SetCondorConfig(self.config_file):
             return run_command(args, timeout=timeout, echo=echo)
 
+    @property
+    def master_log(self):
+        return self._get_log_path("MASTER")
+
+    @property
+    def collector_log(self):
+        return self._get_log_path("COLLECTOR")
+
+    @property
+    def negotiator_log(self):
+        return self._get_log_path("NEGOTIATOR")
+
+    @property
+    def schedd_log(self):
+        return self._get_log_path("SCHEDD")
+
+    @property
+    def startd_log(self):
+        return self._get_log_path("STARTD")
+
+    def _get_log_path(self, daemon: str) -> Path:
+        p = self.run_command(
+            ["condor_config_val", "{}_LOG".format(daemon)], echo=False
+        ).stdout
+        return Path(p)
+
 
 def run_command(args: List[str], timeout: Optional[int] = None, echo=True):
     p = subprocess.run(
@@ -339,14 +389,19 @@ def run_command(args: List[str], timeout: Optional[int] = None, echo=True):
     p.stdout = p.stdout.decode("utf-8").strip()
     p.stderr = p.stderr.decode("utf-8").strip()
 
-    logger.debug("Ran command: {}".format(" ".join(p.args)))
+    msg = "Ran command: {}".format(" ".join(p.args))
     if echo:
-        print(
-            "CONDOR_CONFIG = {}".format(os.environ.get("CONDOR_CONFIG") or "<not set>")
+        msg += "\n" + "\n".join(
+            (
+                "CONDOR_CONFIG = {}".format(
+                    os.environ.get("CONDOR_CONFIG", "<not set>")
+                ),
+                "exit code: {}".format(p.returncode),
+                "stdout:{}{}".format("\n" if "\n" in p.stdout else " ", p.stdout),
+                "stderr:{}{}".format("\n" if "\n" in p.stderr else " ", p.stderr),
+            )
         )
-        print("exit code: {}".format(p.returncode))
-        print("stdout:{}{}".format("\n" if "\n" in p.stdout else " ", p.stdout))
-        print("stderr:{}{}".format("\n" if "\n" in p.stderr else " ", p.stderr))
+    logger.debug(msg)
 
     return p
 
@@ -388,20 +443,12 @@ class SetCondorConfig:
 def test_foo():
     base = Path.home() / "condors"
     shutil.rmtree(base, ignore_errors=True)
-    with Condor(
-        release_dir=Path("/usr"), local_dir=base / "condor_1", config={"FOOBAR": "1"}
-    ) as condor_1:
-        with Condor(
-            release_dir=Path("/usr"),
-            local_dir=base / "condor_2",
-            config={"FOOBAR": "2"},
-        ) as condor_2:
-            condor_1.run_command(args=["condor_config_val", "FOOBAR"], timeout=60)
-            # print("ABOUT TO EXIT IN MIDDLE OF TEST!")
-            # sys.exit(1)
-            condor_2.run_command(args=["condor_config_val", "FOOBAR"], timeout=60)
+    with Condor(local_dir=base / "condor_1", config={"FOOBAR": "1"}) as condor_1:
+        FOOBAR = condor_1.run_command(
+            args=["condor_config_val", "FOOBAR"], timeout=60
+        ).stdout
 
-    condor_1._terminate_condor_master()
+        assert FOOBAR == "1"
 
 
 if __name__ == "__main__":

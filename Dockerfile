@@ -46,6 +46,12 @@ RUN wget -qO - https://research.cs.wisc.edu/htcondor/ubuntu/HTCondor-Release.gpg
  && apt-get -y clean \
  && rm -rf /var/lib/apt/lists/*
 
+RUN apt-get update \
+ && apt-get -y install --no-install-recommends strace python3-pip \
+ && apt-get -y clean
+
+RUN pip3 install --no-cache-dir pytest
+
 # create a user to be our submitter and set conda install location
 ENV USER=tester
 RUN groupadd ${USER} \
@@ -55,4 +61,4 @@ RUN groupadd ${USER} \
 USER ${USER}
 
 CMD ["bash"]
-WORKDIR /home/tester/
+WORKDIR /home/tester/pytest-condor
