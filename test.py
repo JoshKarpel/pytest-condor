@@ -45,7 +45,7 @@ class JobID:
 
     def __eq__(self, other):
         return (
-            isinstance(other, self.__class__)
+            (isinstance(other, self.__class__) or isinstance(self, other.__class__))
             and self.cluster == other.cluster
             and self.proc == other.proc
         )
@@ -635,37 +635,40 @@ def get_current_func_name() -> str:
 
 ###############################
 
-BASE = Path.home() / "tests"
+TESTS_DIR = Path.home() / "tests"
 
 
 def test_single_job_can_be_submitted_and_finish_successfully():
     # or this file's name, or provided by the test framework, etc...
-    test_dir = BASE / get_current_func_name()
+    test_dir = TESTS_DIR / get_current_func_name()
 
-    # inside the block, this Condor is alive
+    # TODO: cross-platform noop
+    sub_description = """
+        executable = /bin/sleep
+        arguments = 1
+        
+        queue
+    """
+    submit_file = write_file(test_dir / "submit" / "job.sub", sub_description)
+
+    # Inside the indented block, this Condor is alive.
+    # If we leave the block or an exception is raised inside the block,
+    # the Condor will be terminated.
     with Condor(local_dir=test_dir / "condor") as condor:
-        # TODO: cross-platform noop
-        sub_description = """
-            executable = /bin/sleep
-            arguments = 1
-            
-            queue
-        """
-        submit_file = write_file(test_dir / "job.sub", sub_description)
-
         # Condor.run_command temporarily sets CONDOR_CONFIG to talk to that Condor
         submit_cmd = condor.run_command(["condor_submit", submit_file])
 
         # did the submit itself succeed?
         assert submit_cmd.returncode == 0
 
+        # parse the stdout of the submit command
         clusterid, num_procs = get_submit_result(submit_cmd)
 
-        # we intended to submit 1 job, but did we?
+        # we intended to submit one job, but did we?
         assert num_procs == 1
 
-        # assert that the given events for this job occur in the given order
-        # it does not respect the lack of ordering inside job queue transactions!
+        # Assert that the given events for the given job occur in the given order.
+        # It does not respect the lack of ordering inside job queue transactions!
         jobid = JobID(clusterid, 0)
         condor.wait_for_job_queue_events(
             {
@@ -677,24 +680,27 @@ def test_single_job_can_be_submitted_and_finish_successfully():
             }
         )
 
-        # get all of the job queue events as a mapping of jobid -> List[events] (ordered)
-        # useful for making asserts about the past
+        # Get all of the job queue events up to this moment
+        # as a mapping of jobid -> List[events] (ordered)
+        # Useful for making asserts about the past.
         jqe = condor.get_job_queue_events()
 
-        # assert that the job itself exited successfully
-        # have to be careful: the second argument of SetAttribute is always a string!
+        # Assert that the job itself exited successfully.
+        # Have to be careful: the second argument of SetAttribute is always a string!
         assert SetAttribute("ExitCode", "0") in jqe[jobid]
 
 
 # def test_dagman_basic():
-#     with Condor(local_dir=BASE / "condor") as condor:
-#         submit_dir = BASE / "submit"
+#     test_dir = BASE / get_current_func_name()
+#
+#     with Condor(local_dir=test_dir / "condor") as condor:
+#         submit_dir = test_dir / "submit"
 #
 #         dag_description = """
 #             JOB         NODERET      basic-node.sub
 #             SCRIPT PRE  NODERET     ./x_dagman_premonitor.pl
 #             SCRIPT POST NODERET     ./job_dagman_monitor.pl $RETURN
-#             """
+#         """
 #         dagfile = write_file(submit_dir / "dagfile.dag", dag_description)
 #
 #         dag_job = """
@@ -705,8 +711,9 @@ def test_single_job_can_be_submitted_and_finish_successfully():
 #             getenv          = true
 #             output          = basic-node.out
 #             error           = basic-node.err
+#
 #             queue
-#             """
+#         """
 #         write_file(submit_dir / "basic-node.sub", dag_description)
 #
 #         submit_cmd = condor.run_command(["condor_submit_dag", dagfile])
