@@ -1,3 +1,5 @@
+#!/usr/bin/env pytest
+
 # Copyright 2019 HTCondor Team, Computer Sciences Department,
 # University of Wisconsin-Madison, WI.
 #
@@ -18,19 +20,18 @@ from typing import List, Dict, Mapping, Optional, Callable, Iterator, Tuple, Any
 import logging
 
 logging.basicConfig(
-    format="[%(levelname)s] %(asctime)s ~ %(message)s", level=logging.DEBUG
+    format="[%(levelname)s] %(asctime)s ~ %(message)s", level=logging.INFO
 )
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 import os
 import subprocess
-import sys
 from pathlib import Path
 import shutil
 import time
 import functools
-import itertools
 import textwrap
 import collections
 import re
@@ -71,6 +72,11 @@ class JobStatus(str, enum.Enum):
     TransferringOutput = "6"
     Suspended = "7"
 
+    def __repr__(self):
+        return "{}.{}".format(self.__class__.__name__, self.name)
+
+    __str__ = __repr__
+
 
 class SetAttribute:
     def __init__(self, attribute, value):
@@ -87,13 +93,20 @@ class SetAttribute:
     def __hash__(self):
         return hash((self.__class__, self.attribute, self.value))
 
+    def _fmt_value(self):
+        """Some values can have special formatting depending on the attribute."""
+        if self.attribute == "JobStatus":
+            return str(JobStatus(self.value))
+
+        return str(self.value)
+
     def __repr__(self):
         return "{}(attribute = {}, value = {})".format(
-            self.__class__.__name__, self.attribute, self.value
+            self.__class__.__name__, self.attribute, self._fmt_value()
         )
 
     def __str__(self):
-        return "Set {} = {}".format(self.attribute, self.value)
+        return "Set {} = {}".format(self.attribute, self._fmt_value())
 
 
 def SetJobStatus(new_status):
@@ -311,6 +324,15 @@ class Condor:
                 continue
 
             who = self.run_command(["condor_who", "-quick"], echo=False)
+
+            if who.stdout.strip() == "":
+                logger.warning(
+                    "condor_who stdout was unexpectedly blank for {}, retrying (giving up in {} seconds)".format(
+                        self, time_to_give_up
+                    )
+                )
+                continue
+
             who_ad = dict(kv.split(" = ") for kv in who.stdout.splitlines())
 
             if who_ad.get("IsReady") == "true":
@@ -478,7 +500,7 @@ class Condor:
             if x is not None:
                 jobid, event = x
                 self._jobid_to_events[jobid].append(event)
-                logger.debug("Read event for jobid {}: {}".format(jobid, event))
+                # logger.debug("Read event for jobid {}: {}".format(jobid, event))
                 yield x
 
     def get_job_queue_events(self) -> Mapping:
@@ -488,13 +510,22 @@ class Condor:
 
         return self._jobid_to_events
 
-    def wait_for_job_queue_events(self, jobid_to_expected_events, timeout: int = 60):
-        jobid_to_expected_event_sets = {
-            jobid: set(events) for jobid, events in jobid_to_expected_events.items()
+    def wait_for_job_queue_events(
+        self, expected_events, unexpected_events=None, timeout: int = 60
+    ):
+        if unexpected_events is None:
+            unexpected_events = {}
+
+        unexpected_events = {
+            jobid: set(events) for jobid, events in unexpected_events.items()
         }
-        jobid_to_expected_events = {
+
+        expected_event_sets = {
+            jobid: set(events) for jobid, events in expected_events.items()
+        }
+        expected_events = {
             jobid: collections.deque(events)
-            for jobid, events in jobid_to_expected_events.items()
+            for jobid, events in expected_events.items()
         }
 
         start = time.time()
@@ -506,25 +537,29 @@ class Condor:
                 raise TimeoutError("Timed out while waiting for job events")
 
             for jobid, event in self.read_events_from_job_queue_log():
-                if event in jobid_to_expected_event_sets.get(jobid, ()):
-                    expected_events = jobid_to_expected_events[jobid]
+                if event in expected_event_sets.get(jobid, ()):
+                    expected_events_for_jobid = expected_events[jobid]
 
                     # The idea here is that, because we enforce order, if
-                    # the next event is the one we just got, we proceed.
-                    # If it isn't, the test has already failed, and we stop
-                    # immediately.
-                    assert event == expected_events[0]
-                    expected_events.popleft()
+                    # the next expected event is the one we just got, we proceed.
+                    # If it isn't, the test has failed, and we stop immediately.
+                    assert event == expected_events_for_jobid[0]
+                    expected_events_for_jobid.popleft()
 
                     logger.debug(
                         "Saw expected event for job {}: {}".format(jobid, event)
                     )
 
-                    if len(expected_events) == 0:
-                        jobid_to_expected_events.pop(jobid)
-                        jobid_to_expected_event_sets.pop(jobid)
+                    if len(expected_events_for_jobid) == 0:
+                        expected_events.pop(jobid)
+                        expected_event_sets.pop(jobid)
 
-                        if len(jobid_to_expected_events) == 0:
+                        logger.debug(
+                            "Have seen all expected events for job {}".format(jobid)
+                        )
+
+                        # if no more expected event, we're done!
+                        if len(expected_events) == 0:
                             return
                     else:
                         logger.debug(
@@ -532,7 +567,19 @@ class Condor:
                                 jobid, ", ".join(map(str, expected_events))
                             )
                         )
+                elif event in unexpected_events.get(jobid, ()):
+                    raise UnexpectedEvent(
+                        "Saw unexpected event for job {}: {}".format(jobid, event)
+                    )
             time.sleep(0.1)
+
+
+class PytestCondorException(Exception):
+    pass
+
+
+class UnexpectedEvent(PytestCondorException):
+    pass
 
 
 def run_command(args: List[str], stdin=None, timeout: int = 60, echo=True):
@@ -668,16 +715,17 @@ def test_single_job_can_be_submitted_and_finish_successfully():
         assert num_procs == 1
 
         # Assert that the given events for the given job occur in the given order.
-        # It does not respect the lack of ordering inside job queue transactions!
+        # It does NOT respect the lack of ordering inside job queue transactions!
         jobid = JobID(clusterid, 0)
         condor.wait_for_job_queue_events(
-            {
+            expected_events={
                 jobid: [
                     SetJobStatus(JobStatus.Idle),
                     SetJobStatus(JobStatus.Running),
                     SetJobStatus(JobStatus.Completed),
                 ]
-            }
+            },
+            unexpected_events={jobid: {SetJobStatus(JobStatus.Held)}},
         )
 
         # Get all of the job queue events up to this moment
