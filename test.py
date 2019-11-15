@@ -513,6 +513,8 @@ class Condor:
     def wait_for_job_queue_events(
         self, expected_events, unexpected_events=None, timeout: int = 60
     ):
+        all_good = True
+
         if unexpected_events is None:
             unexpected_events = {}
 
@@ -534,17 +536,23 @@ class Condor:
             elapsed = time.time() - start
             if elapsed > timeout:
                 # TODO: add more info in error here
-                raise TimeoutError("Timed out while waiting for job events")
+                return False
 
             for jobid, event in self.read_events_from_job_queue_log():
                 if event in expected_event_sets.get(jobid, ()):
                     expected_events_for_jobid = expected_events[jobid]
 
-                    # The idea here is that, because we enforce order, if
-                    # the next expected event is the one we just got, we proceed.
-                    # If it isn't, the test has failed, and we stop immediately.
-                    assert event == expected_events_for_jobid[0]
-                    expected_events_for_jobid.popleft()
+                    next_event, callback = expected_events_for_jobid[0], lambda: None
+                    if isinstance(next_event, tuple):
+                        next_event, callback = next_event
+
+                    if event == next_event:
+                        expected_events_for_jobid.popleft()
+                        callback()
+                    else:
+                        all_good = False
+                        expected_events.pop(jobid)
+                        expected_event_sets.pop(jobid)
 
                     logger.debug(
                         "Saw expected event for job {}: {}".format(jobid, event)
@@ -560,7 +568,7 @@ class Condor:
 
                         # if no more expected event, we're done!
                         if len(expected_events) == 0:
-                            return
+                            return all_good
                     else:
                         logger.debug(
                             "Still expecting events for job {}: [{}]".format(
@@ -568,18 +576,12 @@ class Condor:
                             )
                         )
                 elif event in unexpected_events.get(jobid, ()):
-                    raise UnexpectedEvent(
-                        "Saw unexpected event for job {}: {}".format(jobid, event)
+                    logger.error(
+                        "Saw unexpected event for job {}: {} (was expecting {})".format(
+                            jobid, event, expected_events[jobid][0]
+                        )
                     )
             time.sleep(0.1)
-
-
-class PytestCondorException(Exception):
-    pass
-
-
-class UnexpectedEvent(PytestCondorException):
-    pass
 
 
 def run_command(args: List[str], stdin=None, timeout: int = 60, echo=True):
@@ -706,23 +708,23 @@ def test_single_job_can_be_submitted_and_finish_successfully():
         submit_cmd = condor.run_command(["condor_submit", submit_file])
 
         # did the submit itself succeed?
-        assert submit_cmd.returncode == 0
+        # assert submit_cmd.returncode == 0
 
         # parse the stdout of the submit command
         clusterid, num_procs = get_submit_result(submit_cmd)
 
         # we intended to submit one job, but did we?
-        assert num_procs == 1
+        # assert num_procs == 1
 
         # Assert that the given events for the given job occur in the given order.
         # It does NOT respect the lack of ordering inside job queue transactions!
         jobid = JobID(clusterid, 0)
-        condor.wait_for_job_queue_events(
+        events_in_correct_order = condor.wait_for_job_queue_events(
             expected_events={
                 jobid: [
-                    SetJobStatus(JobStatus.Idle),
-                    SetJobStatus(JobStatus.Running),
+                    (SetJobStatus(JobStatus.Idle), lambda: print("Help!")),
                     SetJobStatus(JobStatus.Completed),
+                    SetJobStatus(JobStatus.Running),
                 ]
             },
             unexpected_events={jobid: {SetJobStatus(JobStatus.Held)}},
@@ -735,7 +737,16 @@ def test_single_job_can_be_submitted_and_finish_successfully():
 
         # Assert that the job itself exited successfully.
         # Have to be careful: the second argument of SetAttribute is always a string!
-        assert SetAttribute("ExitCode", "0") in jqe[jobid]
+        # assert SetAttribute("ExitCode", "0") in jqe[jobid]
+
+        assert all(
+            (
+                submit_cmd.returncode == 0,
+                num_procs == 1,
+                events_in_correct_order,
+                SetAttribute("ExitCode", "0") in jqe[jobid],
+            )
+        )
 
 
 # def test_dagman_basic():
