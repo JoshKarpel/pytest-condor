@@ -535,16 +535,21 @@ class Condor:
             time.sleep(0.1)
 
 
-def run_command(args: List[str], timeout: int = 60, echo=True):
+def run_command(args: List[str], stdin=None, timeout: int = 60, echo=True):
     if timeout is None:
         raise TypeError("run_command timeout cannot be None")
 
     args = list(map(str, args))
     p = subprocess.run(
-        args, timeout=timeout, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        args,
+        timeout=timeout,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        stdin=stdin,
+        universal_newlines=True,
     )
-    p.stdout = p.stdout.decode("utf-8").strip()
-    p.stderr = p.stderr.decode("utf-8").strip()
+    p.stdout = p.stdout.rstrip()
+    p.stderr = p.stderr.rstrip()
 
     msg = "\n".join(
         (
