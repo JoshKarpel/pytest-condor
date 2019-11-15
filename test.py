@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import List, Dict, Mapping, Optional, Callable
+from typing import List, Dict, Mapping, Optional, Callable, Iterator, Tuple, Any
 
 import logging
 
@@ -30,6 +30,75 @@ from pathlib import Path
 import shutil
 import time
 import functools
+import itertools
+import textwrap
+import collections
+import re
+import enum
+import inspect
+
+
+class JobID:
+    def __init__(self, cluster, proc):
+        self.cluster = int(cluster)
+        self.proc = int(proc)
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, self.__class__)
+            and self.cluster == other.cluster
+            and self.proc == other.proc
+        )
+
+    def __hash__(self):
+        return hash((self.__class__, self.cluster, self.proc))
+
+    def __repr__(self):
+        return "{}(cluster = {}, proc = {})".format(
+            self.__class__.__name__, self.cluster, self.proc
+        )
+
+    def __str__(self):
+        return "{}.{}".format(self.cluster, self.proc)
+
+
+class JobStatus(str, enum.Enum):
+    Idle = "1"
+    Running = "2"
+    Removed = "3"
+    Completed = "4"
+    Held = "5"
+    TransferringOutput = "6"
+    Suspended = "7"
+
+
+class SetAttribute:
+    def __init__(self, attribute, value):
+        self.attribute = attribute
+        self.value = value
+
+    def __eq__(self, other):
+        return (
+            (isinstance(other, self.__class__) or isinstance(self, other.__class__))
+            and self.attribute == other.attribute
+            and self.value == other.value
+        )
+
+    def __hash__(self):
+        return hash((self.__class__, self.attribute, self.value))
+
+    def __repr__(self):
+        return "{}(attribute = {}, value = {})".format(
+            self.__class__.__name__, self.attribute, self.value
+        )
+
+    def __str__(self):
+        return "Set {} = {}".format(self.attribute, self.value)
+
+
+def SetJobStatus(new_status):
+    return SetAttribute("JobStatus", new_status)
+
 
 DEFAULT_PARAMS = {
     "LOCAL_CONFIG_FILE": "",
@@ -46,6 +115,7 @@ DEFAULT_PARAMS = {
     "NEGOTIATOR_CYCLE_DELAY": 5,
     "MachineMaxVacateTime": 5,
     "RUNBENCHMARKS": "False",
+    "JOB_QUEUE_LOG": "$(SPOOL)/job_queue.log",
 }
 
 
@@ -82,7 +152,11 @@ def skip_if(condition: Callable[["Condor"], bool]):
 
 class Condor:
     def __init__(
-        self, local_dir: Path, config: Mapping[str, str] = None, raw_config: str = None
+        self,
+        local_dir: Path,
+        config: Mapping[str, str] = None,
+        raw_config: str = None,
+        clean_local_dir_before: bool = True,
     ):
         self.local_dir = local_dir
 
@@ -99,15 +173,20 @@ class Condor:
         self.config = {k: v if v is not None else "" for k, v in config.items()}
         self.raw_config = raw_config or ""
 
+        self.clean_local_dir_before = clean_local_dir_before
+
         self.condor_master = None
         self.condor_is_ready = False
+
+        self._job_queue_log_file = None
+        self._jobid_to_events = collections.defaultdict(list)
 
     def __repr__(self):
         return "{}(local_dir = {})".format(self.__class__.__name__, self.local_dir)
 
     @property
     def master_is_alive(self) -> bool:
-        return self.condor_master is not None and self.condor_master.returncode is None
+        return self.condor_master is not None and self.condor_master.poll() is None
 
     def __enter__(self) -> "Condor":
         self._start()
@@ -135,6 +214,10 @@ class Condor:
         logger.info("Started {}".format(self))
 
     def _setup_local_dirs(self):
+        if self.clean_local_dir_before and self.local_dir.exists():
+            shutil.rmtree(self.local_dir)
+            logger.debug("Removed existing local dir for {}".format(self))
+
         for dir in (
             self.local_dir,
             self.execute_dir,
@@ -221,7 +304,7 @@ class Condor:
             # if the master log does not exist yet, we can't use condor_who
             if not self.master_log.exists():
                 logger.debug(
-                    "MASTER_LOG at {} does not yet exist for {} (will give up in {} seconds)".format(
+                    "MASTER_LOG at {} does not yet exist for {} (giving up in {} seconds)".format(
                         self.master_log, self, time_to_give_up
                     )
                 )
@@ -230,7 +313,7 @@ class Condor:
             who = self.run_command(["condor_who", "-quick"], echo=False)
             who_ad = dict(kv.split(" = ") for kv in who.stdout.splitlines())
 
-            if who_ad["IsReady"] == "true":
+            if who_ad.get("IsReady") == "true":
                 self.condor_is_ready = True
                 return
 
@@ -239,7 +322,7 @@ class Condor:
                     unready_daemons.discard(k)
 
             logger.debug(
-                "{} is waiting for daemons to be ready (will give up in {} seconds): {}".format(
+                "{} is waiting for daemons to be ready (giving up in {} seconds): {}".format(
                     self, time_to_give_up, " ".join(sorted(unready_daemons))
                 )
             )
@@ -262,6 +345,7 @@ class Condor:
 
         self._condor_off()
         self._wait_for_master_to_terminate()
+        # TODO: look for core dumps
         # self._remove_local_dir()
 
         logger.info("Cleaned up {}".format(self))
@@ -351,29 +435,33 @@ class Condor:
     def read_config(self):
         return self.config_file.read_text()
 
-    def run_command(self, args: List[str], timeout: Optional[int] = None, echo=True):
+    def run_command(self, args: List[str], timeout: int = 60, echo=True):
         with SetCondorConfig(self.config_file):
             return run_command(args, timeout=timeout, echo=echo)
 
     @property
-    def master_log(self):
+    def master_log(self) -> Path:
         return self._get_log_path("MASTER")
 
     @property
-    def collector_log(self):
+    def collector_log(self) -> Path:
         return self._get_log_path("COLLECTOR")
 
     @property
-    def negotiator_log(self):
+    def negotiator_log(self) -> Path:
         return self._get_log_path("NEGOTIATOR")
 
     @property
-    def schedd_log(self):
+    def schedd_log(self) -> Path:
         return self._get_log_path("SCHEDD")
 
     @property
-    def startd_log(self):
+    def startd_log(self) -> Path:
         return self._get_log_path("STARTD")
+
+    @property
+    def job_queue_log(self) -> Path:
+        return self._get_log_path("JOB_QUEUE")
 
     def _get_log_path(self, daemon: str) -> Path:
         p = self.run_command(
@@ -381,27 +469,92 @@ class Condor:
         ).stdout
         return Path(p)
 
+    def read_events_from_job_queue_log(self) -> Iterator[Tuple[JobID, Any]]:
+        if self._job_queue_log_file is None:
+            self._job_queue_log_file = self.job_queue_log.open(mode="r")
 
-def run_command(args: List[str], timeout: Optional[int] = None, echo=True):
+        for line in self._job_queue_log_file:
+            x = parse_job_queue_log_line(line)
+            if x is not None:
+                jobid, event = x
+                self._jobid_to_events[jobid].append(event)
+                logger.debug("Read event for jobid {}: {}".format(jobid, event))
+                yield x
+
+    def get_job_queue_events(self) -> Mapping:
+        # just drive the iterator to completion
+        for _ in self.read_events_from_job_queue_log():
+            pass
+
+        return self._jobid_to_events
+
+    def wait_for_job_queue_events(self, jobid_to_expected_events, timeout: int = 60):
+        jobid_to_expected_event_sets = {
+            jobid: set(events) for jobid, events in jobid_to_expected_events.items()
+        }
+        jobid_to_expected_events = {
+            jobid: collections.deque(events)
+            for jobid, events in jobid_to_expected_events.items()
+        }
+
+        start = time.time()
+
+        while True:
+            elapsed = time.time() - start
+            if elapsed > timeout:
+                # TODO: add more info in error here
+                raise TimeoutError("Timed out while waiting for job events")
+
+            for jobid, event in self.read_events_from_job_queue_log():
+                if event in jobid_to_expected_event_sets.get(jobid, ()):
+                    expected_events = jobid_to_expected_events[jobid]
+
+                    # The idea here is that, because we enforce order, if
+                    # the next event is the one we just got, we proceed.
+                    # If it isn't, the test has already failed, and we stop
+                    # immediately.
+                    assert event == expected_events[0]
+                    expected_events.popleft()
+
+                    logger.debug(
+                        "Saw expected event for job {}: {}".format(jobid, event)
+                    )
+
+                    if len(expected_events) == 0:
+                        jobid_to_expected_events.pop(jobid)
+                        jobid_to_expected_event_sets.pop(jobid)
+
+                        if len(jobid_to_expected_events) == 0:
+                            return
+                    else:
+                        logger.debug(
+                            "Still expecting events for job {}: [{}]".format(
+                                jobid, ", ".join(map(str, expected_events))
+                            )
+                        )
+            time.sleep(0.1)
+
+
+def run_command(args: List[str], timeout: int = 60, echo=True):
+    args = list(map(str, args))
     p = subprocess.run(
         args, timeout=timeout, stdout=subprocess.PIPE, stderr=subprocess.PIPE
     )
     p.stdout = p.stdout.decode("utf-8").strip()
     p.stderr = p.stderr.decode("utf-8").strip()
 
-    msg = "Ran command: {}".format(" ".join(p.args))
-    if echo:
-        msg += "\n" + "\n".join(
-            (
-                "CONDOR_CONFIG = {}".format(
-                    os.environ.get("CONDOR_CONFIG", "<not set>")
-                ),
-                "exit code: {}".format(p.returncode),
-                "stdout:{}{}".format("\n" if "\n" in p.stdout else " ", p.stdout),
-                "stderr:{}{}".format("\n" if "\n" in p.stderr else " ", p.stderr),
-            )
+    msg = "\n".join(
+        (
+            "Ran command: {}".format(" ".join(p.args)),
+            "CONDOR_CONFIG = {}".format(os.environ.get("CONDOR_CONFIG", "<not set>")),
+            "exit code: {}".format(p.returncode),
+            "stdout:{}{}".format("\n" if "\n" in p.stdout else " ", p.stdout),
+            "stderr:{}{}".format("\n" if "\n" in p.stderr else " ", p.stderr),
         )
+    )
     logger.debug(msg)
+    if echo:
+        print(msg)
 
     return p
 
@@ -437,19 +590,121 @@ class SetCondorConfig:
             unset_env_var("CONDOR_CONFIG")
 
 
+def write_file(path: Path, text: str) -> Path:
+    path = Path(path).absolute()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(textwrap.dedent(text))
+    return path
+
+
+RE_SUBMIT_RESULT = re.compile(r"(\d+) job\(s\) submitted to cluster (\d+)\.")
+
+
+def get_submit_result(submit_cmd: subprocess.CompletedProcess) -> Tuple[int, int]:
+    match = RE_SUBMIT_RESULT.search(submit_cmd.stdout)
+    if match is not None:
+        num_procs = int(match.group(1))
+        clusterid = int(match.group(2))
+        return clusterid, num_procs
+
+    raise ValueError(
+        'Was not able to extract submit results from command "{}", stdout:\n{}\nstderr:\n{}'.format(
+            " ".join(submit_cmd.args), submit_cmd.stdout, submit_cmd.stderr
+        )
+    )
+
+
+def parse_job_queue_log_line(line: str):
+    parts = line.strip().split(" ", 3)
+
+    if parts[0] == "103":
+        return JobID(*parts[1].split(".")), SetAttribute(parts[2], parts[3])
+
+
+def get_current_func_name() -> str:
+    return inspect.currentframe().f_back.f_code.co_name
+
+
 ###############################
 
+BASE = Path.home() / "tests"
 
-def test_foo():
-    base = Path.home() / "condors"
-    shutil.rmtree(base, ignore_errors=True)
-    with Condor(local_dir=base / "condor_1", config={"FOOBAR": "1"}) as condor_1:
-        FOOBAR = condor_1.run_command(
-            args=["condor_config_val", "FOOBAR"], timeout=60
-        ).stdout
 
-        assert FOOBAR == "1"
+def test_single_job_can_be_submitted_and_finish_successfully():
+    # or this file's name, or provided by the test framework, etc...
+    test_dir = BASE / get_current_func_name()
+
+    # inside the block, this Condor is alive
+    with Condor(local_dir=test_dir / "condor") as condor:
+        # TODO: cross-platform noop
+        sub_description = """
+            executable = /bin/sleep
+            arguments = 1
+            
+            queue
+        """
+        submit_file = write_file(test_dir / "job.sub", sub_description)
+
+        # Condor.run_command temporarily sets CONDOR_CONFIG to talk to that Condor
+        submit_cmd = condor.run_command(["condor_submit", submit_file])
+
+        # did the submit itself succeed?
+        assert submit_cmd.returncode == 0
+
+        clusterid, num_procs = get_submit_result(submit_cmd)
+
+        # we intended to submit 1 job, but did we?
+        assert num_procs == 1
+
+        # assert that the given events for this job occur in the given order
+        # it does not respect the lack of ordering inside job queue transactions!
+        jobid = JobID(clusterid, 0)
+        condor.wait_for_job_queue_events(
+            {
+                jobid: [
+                    SetJobStatus(JobStatus.Idle),
+                    SetJobStatus(JobStatus.Running),
+                    SetJobStatus(JobStatus.Completed),
+                ]
+            }
+        )
+
+        # get all of the job queue events as a mapping of jobid -> List[events] (ordered)
+        # useful for making asserts about the past
+        jqe = condor.get_job_queue_events()
+
+        # assert that the job itself exited successfully
+        # have to be careful: the second argument of SetAttribute is always a string!
+        assert SetAttribute("ExitCode", "0") in jqe[jobid]
+
+
+# def test_dagman_basic():
+#     with Condor(local_dir=BASE / "condor") as condor:
+#         submit_dir = BASE / "submit"
+#
+#         dag_description = """
+#             JOB         NODERET      basic-node.sub
+#             SCRIPT PRE  NODERET     ./x_dagman_premonitor.pl
+#             SCRIPT POST NODERET     ./job_dagman_monitor.pl $RETURN
+#             """
+#         dagfile = write_file(submit_dir / "dagfile.dag", dag_description)
+#
+#         dag_job = """
+#             executable      = ./x_dagman_node-ret.pl
+#             universe        = vanilla
+#             log             = basic-node.log
+#             notification    = NEVER
+#             getenv          = true
+#             output          = basic-node.out
+#             error           = basic-node.err
+#             queue
+#             """
+#         write_file(submit_dir / "basic-node.sub", dag_description)
+#
+#         submit_cmd = condor.run_command(["condor_submit_dag", dagfile])
+#
+#         assert submit_cmd.returncode == 0
 
 
 if __name__ == "__main__":
-    test_foo()
+    test_single_job_can_be_submitted_and_finish_successfully()
