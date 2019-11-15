@@ -536,6 +536,9 @@ class Condor:
 
 
 def run_command(args: List[str], timeout: int = 60, echo=True):
+    if timeout is None:
+        raise TypeError("run_command timeout cannot be None")
+
     args = list(map(str, args))
     p = subprocess.run(
         args, timeout=timeout, stdout=subprocess.PIPE, stderr=subprocess.PIPE
