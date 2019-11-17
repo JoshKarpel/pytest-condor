@@ -19,9 +19,9 @@ from typing import List, Dict, Mapping, Optional, Callable, Iterator, Tuple, Any
 
 import logging
 
-logging.basicConfig(
-    format="[%(levelname)s] %(asctime)s ~ %(message)s", level=logging.INFO
-)
+# logging.basicConfig(
+#     format="[%(levelname)s] %(asctime)s ~ %(message)s", level=logging.INFO
+# )
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -37,6 +37,8 @@ import collections
 import re
 import enum
 import inspect
+
+import pytest
 
 
 class JobID:
@@ -682,16 +684,51 @@ def get_current_func_name() -> str:
     return inspect.currentframe().f_back.f_code.co_name
 
 
+_in_order_sentinel = object()
+
+
+def in_order(iterable, expected):
+    expected = list(expected)
+    expected_set = set(expected)
+    iter_expected = iter(expected)
+    next_expected = next(iter_expected, _in_order_sentinel)
+
+    for item in iterable:
+        if item not in expected_set:
+            continue
+
+        if item == next_expected:
+            next_expected = next(iter_expected, _in_order_sentinel)
+
+            if next_expected is _in_order_sentinel:
+                # we have seen all the expected events
+                return True
+        else:
+            # TODO: log message about what the expectation was vs what we found
+            return False
+
+
 ###############################
 
 TESTS_DIR = Path.home() / "tests"
 
 
-def test_single_job_can_be_submitted_and_finish_successfully():
-    # or this file's name, or provided by the test framework, etc...
-    test_dir = TESTS_DIR / get_current_func_name()
+@pytest.fixture(scope="class")
+def test_dir(request):
+    if request.cls is not None:
+        return TESTS_DIR / request.cls.__name__
 
-    # TODO: cross-platform noop
+    return TESTS_DIR / request.function.__name__
+
+
+@pytest.fixture(scope="class")
+def plain_condor(test_dir):
+    with Condor(local_dir=test_dir / "condor") as condor:
+        yield condor
+
+
+@pytest.fixture(scope="class")
+def submit_sleep_job_cmd(plain_condor, test_dir):
     sub_description = """
         executable = /bin/sleep
         arguments = 1
@@ -700,85 +737,55 @@ def test_single_job_can_be_submitted_and_finish_successfully():
     """
     submit_file = write_file(test_dir / "submit" / "job.sub", sub_description)
 
-    # Inside the indented block, this Condor is alive.
-    # If we leave the block or an exception is raised inside the block,
-    # the Condor will be terminated.
-    with Condor(local_dir=test_dir / "condor") as condor:
-        # Condor.run_command temporarily sets CONDOR_CONFIG to talk to that Condor
-        submit_cmd = condor.run_command(["condor_submit", submit_file])
+    return plain_condor.run_command(["condor_submit", submit_file])
 
-        # did the submit itself succeed?
-        # assert submit_cmd.returncode == 0
 
-        # parse the stdout of the submit command
-        clusterid, num_procs = get_submit_result(submit_cmd)
+@pytest.fixture(scope="class")
+def finished_sleep_jobid(plain_condor, submit_sleep_job_cmd):
+    clusterid, num_procs = get_submit_result(submit_sleep_job_cmd)
 
-        # we intended to submit one job, but did we?
-        # assert num_procs == 1
+    jobid = JobID(clusterid, 0)
 
-        # Assert that the given events for the given job occur in the given order.
-        # It does NOT respect the lack of ordering inside job queue transactions!
-        jobid = JobID(clusterid, 0)
-        events_in_correct_order = condor.wait_for_job_queue_events(
-            expected_events={
-                jobid: [
-                    (SetJobStatus(JobStatus.Idle), lambda: print("Help!")),
-                    SetJobStatus(JobStatus.Completed),
-                    SetJobStatus(JobStatus.Running),
-                ]
-            },
-            unexpected_events={jobid: {SetJobStatus(JobStatus.Held)}},
+    plain_condor.wait_for_job_queue_events(
+        expected_events={
+            jobid: [
+                SetJobStatus(JobStatus.Idle),
+                SetJobStatus(JobStatus.Running),
+                SetJobStatus(JobStatus.Completed),
+            ]
+        },
+        unexpected_events={jobid: {SetJobStatus(JobStatus.Held)}},
+    )
+
+    return jobid
+
+
+@pytest.fixture(scope="class")
+def job_queue_events_for_sleep_job(plain_condor, finished_sleep_jobid):
+    return plain_condor.get_job_queue_events()[finished_sleep_jobid]
+
+
+class TestJobCanRun:
+    def test_submit_cmd_succeeded(self, submit_sleep_job_cmd):
+        assert submit_sleep_job_cmd.returncode == 0
+
+    def test_only_one_proc(self, submit_sleep_job_cmd):
+        _, num_procs = get_submit_result(submit_sleep_job_cmd)
+        assert num_procs == 1
+
+    def test_job_events_in_correct_order(self, job_queue_events_for_sleep_job):
+        assert in_order(
+            job_queue_events_for_sleep_job,
+            [
+                SetJobStatus(JobStatus.Idle),
+                SetJobStatus(JobStatus.Running),
+                SetJobStatus(JobStatus.Completed),
+            ],
         )
 
-        # Get all of the job queue events up to this moment
-        # as a mapping of jobid -> List[events] (ordered)
-        # Useful for making asserts about the past.
-        jqe = condor.get_job_queue_events()
+    def test_job_executed_successfully(self, job_queue_events_for_sleep_job):
+        assert SetAttribute("ExitCode", "0") in job_queue_events_for_sleep_job
 
-        # Assert that the job itself exited successfully.
-        # Have to be careful: the second argument of SetAttribute is always a string!
-        # assert SetAttribute("ExitCode", "0") in jqe[jobid]
-
-        assert all(
-            (
-                submit_cmd.returncode == 0,
-                num_procs == 1,
-                events_in_correct_order,
-                SetAttribute("ExitCode", "0") in jqe[jobid],
-            )
-        )
-
-
-# def test_dagman_basic():
-#     test_dir = BASE / get_current_func_name()
-#
-#     with Condor(local_dir=test_dir / "condor") as condor:
-#         submit_dir = test_dir / "submit"
-#
-#         dag_description = """
-#             JOB         NODERET      basic-node.sub
-#             SCRIPT PRE  NODERET     ./x_dagman_premonitor.pl
-#             SCRIPT POST NODERET     ./job_dagman_monitor.pl $RETURN
-#         """
-#         dagfile = write_file(submit_dir / "dagfile.dag", dag_description)
-#
-#         dag_job = """
-#             executable      = ./x_dagman_node-ret.pl
-#             universe        = vanilla
-#             log             = basic-node.log
-#             notification    = NEVER
-#             getenv          = true
-#             output          = basic-node.out
-#             error           = basic-node.err
-#
-#             queue
-#         """
-#         write_file(submit_dir / "basic-node.sub", dag_description)
-#
-#         submit_cmd = condor.run_command(["condor_submit_dag", dagfile])
-#
-#         assert submit_cmd.returncode == 0
-
-
-if __name__ == "__main__":
-    test_single_job_can_be_submitted_and_finish_successfully()
+    # def test_bad(self, job_queue_events_for_sleep_job):
+    #     print("hi")
+    #     assert False
