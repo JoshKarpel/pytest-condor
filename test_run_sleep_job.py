@@ -22,7 +22,7 @@ from harness import (
 def submit_sleep_job_cmd(default_condor, test_dir):
     sub_description = """
         executable = /bin/sleep
-        arguments = 1
+        arguments = 0
         
         queue
     """
@@ -37,7 +37,7 @@ def finished_sleep_jobid(default_condor, submit_sleep_job_cmd):
 
     jobid = JobID(clusterid, 0)
 
-    default_condor.wait_for_job_queue_events(
+    default_condor.job_queue.wait(
         expected_events={jobid: [SetJobStatus(JobStatus.Completed)]},
         unexpected_events={jobid: {SetJobStatus(JobStatus.Held)}},
     )
@@ -47,7 +47,7 @@ def finished_sleep_jobid(default_condor, submit_sleep_job_cmd):
 
 @pytest.fixture(scope="class")
 def job_queue_events_for_sleep_job(default_condor, finished_sleep_jobid):
-    return default_condor.get_job_queue_events()[finished_sleep_jobid]
+    return default_condor.job_queue.by_jobid[finished_sleep_jobid]
 
 
 class TestCanRunSleepJob:

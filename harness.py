@@ -186,8 +186,7 @@ class Condor:
         self.condor_master = None
         self.condor_is_ready = False
 
-        self._job_queue_log_file = None
-        self._jobid_to_events = collections.defaultdict(list)
+        self.job_queue = JobQueue(self)
 
     def __repr__(self):
         return "{}(local_dir = {})".format(self.__class__.__name__, self.local_dir)
@@ -318,7 +317,7 @@ class Condor:
                 )
                 continue
 
-            who = self.run_command(["condor_who", "-quick"], echo=False)
+            who = self.run_command(["condor_who", "-quick"], echo=False, suppress=True)
 
             if who.stdout.strip() == "":
                 logger.warning(
@@ -452,9 +451,9 @@ class Condor:
     def read_config(self):
         return self.config_file.read_text()
 
-    def run_command(self, args: List[str], timeout: int = 60, echo=True):
+    def run_command(self, *args, **kwargs):
         with SetCondorConfig(self.config_file):
-            return run_command(args, timeout=timeout, echo=echo)
+            return run_command(*args, **kwargs)
 
     @property
     def master_log(self) -> Path:
@@ -486,28 +485,35 @@ class Condor:
         ).stdout
         return Path(p)
 
-    def read_events_from_job_queue_log(self) -> Iterator[Tuple[JobID, Any]]:
+
+class JobQueue:
+    def __init__(self, condor: Condor):
+        self.condor = condor
+
+        self.events = []
+        self.by_jobid = collections.defaultdict(list)
+
+        self._job_queue_log_file = None
+
+    def __iter__(self):
+        yield from self.events
+
+    def filter(self, condition):
+        yield from ((j, e) for j, e in self if condition(j, e))
+
+    def read_events(self) -> Iterator[Tuple[JobID, Any]]:
         if self._job_queue_log_file is None:
-            self._job_queue_log_file = self.job_queue_log.open(mode="r")
+            self._job_queue_log_file = self.condor.job_queue_log.open(mode="r")
 
         for line in self._job_queue_log_file:
             x = parse_job_queue_log_line(line)
             if x is not None:
                 jobid, event = x
-                self._jobid_to_events[jobid].append(event)
-                # logger.debug("Read event for jobid {}: {}".format(jobid, event))
+                self.events.append((jobid, event))
+                self.by_jobid[jobid].append(event)
                 yield x
 
-    def get_job_queue_events(self) -> Mapping:
-        # just drive the iterator to completion
-        for _ in self.read_events_from_job_queue_log():
-            pass
-
-        return self._jobid_to_events
-
-    def wait_for_job_queue_events(
-        self, expected_events, unexpected_events=None, timeout: int = 60
-    ):
+    def wait(self, expected_events, unexpected_events=None, timeout: int = 60):
         all_good = True
 
         if unexpected_events is None:
@@ -537,16 +543,13 @@ class Condor:
                 # TODO: add more info in error here
                 return False
 
-            for jobid, event in self.read_events_from_job_queue_log():
-                print()
-                print(event)
+            for jobid, event in self.read_events():
                 if event in expected_event_sets.get(jobid, ()):
                     expected_events_for_jobid = expected_events[jobid]
 
                     next_event, callback = expected_events_for_jobid[0]
 
                     if event == next_event:
-                        print(event, callback)
                         expected_events_for_jobid.popleft()
                         logger.debug(
                             "Saw expected job queue event for job {}: {}".format(
@@ -587,7 +590,9 @@ class Condor:
             time.sleep(0.1)
 
 
-def run_command(args: List[str], stdin=None, timeout: int = 60, echo=True):
+def run_command(
+    args: List[str], stdin=None, timeout: int = 60, echo=True, suppress=False
+):
     if timeout is None:
         raise TypeError("run_command timeout cannot be None")
 
@@ -603,15 +608,16 @@ def run_command(args: List[str], stdin=None, timeout: int = 60, echo=True):
     p.stdout = p.stdout.rstrip()
     p.stderr = p.stderr.rstrip()
 
-    msg = "\n".join(
-        (
-            "Ran command: {}".format(" ".join(p.args)),
+    msg_lines = ["Ran command: {}".format(" ".join(p.args))]
+    if not suppress:
+        msg_lines += [
             "CONDOR_CONFIG = {}".format(os.environ.get("CONDOR_CONFIG", "<not set>")),
             "exit code: {}".format(p.returncode),
             "stdout:{}{}".format("\n" if "\n" in p.stdout else " ", p.stdout),
             "stderr:{}{}".format("\n" if "\n" in p.stderr else " ", p.stderr),
-        )
-    )
+        ]
+
+    msg = "\n".join(msg_lines)
     logger.debug(msg)
     if echo:
         print(msg)

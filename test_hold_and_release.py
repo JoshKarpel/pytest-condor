@@ -34,7 +34,7 @@ def job_queue_events_for_sleep_job(default_condor, test_dir):
     clusterid, num_procs = get_submit_result(submit_cmd)
     jobid = JobID(clusterid, 0)
 
-    default_condor.wait_for_job_queue_events(
+    default_condor.job_queue.wait(
         {
             jobid: [
                 (
@@ -55,7 +55,7 @@ def job_queue_events_for_sleep_job(default_condor, test_dir):
         timeout=60,
     )
 
-    return default_condor.get_job_queue_events()[jobid]
+    return default_condor.job_queue.by_jobid[jobid]
 
 
 class TestCanHoldAndReleaseJob:
