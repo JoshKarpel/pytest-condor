@@ -1,5 +1,3 @@
-#!/usr/bin/env pytest
-
 # Copyright 2019 HTCondor Team, Computer Sciences Department,
 # University of Wisconsin-Madison, WI.
 #
@@ -19,10 +17,6 @@ from typing import List, Dict, Mapping, Optional, Callable, Iterator, Tuple, Any
 
 import logging
 
-# logging.basicConfig(
-#     format="[%(levelname)s] %(asctime)s ~ %(message)s", level=logging.INFO
-# )
-
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
@@ -37,8 +31,6 @@ import collections
 import re
 import enum
 import inspect
-
-import pytest
 
 
 class JobID:
@@ -706,86 +698,3 @@ def in_order(iterable, expected):
         else:
             # TODO: log message about what the expectation was vs what we found
             return False
-
-
-###############################
-
-TESTS_DIR = Path.home() / "tests"
-
-
-@pytest.fixture(scope="class")
-def test_dir(request):
-    if request.cls is not None:
-        return TESTS_DIR / request.cls.__name__
-
-    return TESTS_DIR / request.function.__name__
-
-
-@pytest.fixture(scope="class")
-def plain_condor(test_dir):
-    with Condor(local_dir=test_dir / "condor") as condor:
-        yield condor
-
-
-@pytest.fixture(scope="class")
-def submit_sleep_job_cmd(plain_condor, test_dir):
-    sub_description = """
-        executable = /bin/sleep
-        arguments = 1
-        
-        queue
-    """
-    submit_file = write_file(test_dir / "submit" / "job.sub", sub_description)
-
-    return plain_condor.run_command(["condor_submit", submit_file])
-
-
-@pytest.fixture(scope="class")
-def finished_sleep_jobid(plain_condor, submit_sleep_job_cmd):
-    clusterid, num_procs = get_submit_result(submit_sleep_job_cmd)
-
-    jobid = JobID(clusterid, 0)
-
-    plain_condor.wait_for_job_queue_events(
-        expected_events={
-            jobid: [
-                SetJobStatus(JobStatus.Idle),
-                SetJobStatus(JobStatus.Running),
-                SetJobStatus(JobStatus.Completed),
-            ]
-        },
-        unexpected_events={jobid: {SetJobStatus(JobStatus.Held)}},
-    )
-
-    return jobid
-
-
-@pytest.fixture(scope="class")
-def job_queue_events_for_sleep_job(plain_condor, finished_sleep_jobid):
-    return plain_condor.get_job_queue_events()[finished_sleep_jobid]
-
-
-class TestJobCanRun:
-    def test_submit_cmd_succeeded(self, submit_sleep_job_cmd):
-        assert submit_sleep_job_cmd.returncode == 0
-
-    def test_only_one_proc(self, submit_sleep_job_cmd):
-        _, num_procs = get_submit_result(submit_sleep_job_cmd)
-        assert num_procs == 1
-
-    def test_job_events_in_correct_order(self, job_queue_events_for_sleep_job):
-        assert in_order(
-            job_queue_events_for_sleep_job,
-            [
-                SetJobStatus(JobStatus.Idle),
-                SetJobStatus(JobStatus.Running),
-                SetJobStatus(JobStatus.Completed),
-            ],
-        )
-
-    def test_job_executed_successfully(self, job_queue_events_for_sleep_job):
-        assert SetAttribute("ExitCode", "0") in job_queue_events_for_sleep_job
-
-    # def test_bad(self, job_queue_events_for_sleep_job):
-    #     print("hi")
-    #     assert False
