@@ -14,7 +14,6 @@ from harness import (
     write_file,
     get_submit_result,
     JobID,
-    SetAttribute,
     SetJobStatus,
     JobStatus,
     in_order,
@@ -30,8 +29,10 @@ def condor(test_dir):
             "SLOT_TYPE_1": "cpus=100%,memory=100%,disk=100%",
             "SLOT_TYPE_1_PARTITIONABLE": "True",
             "NUM_SLOTS_TYPE_1": "1",
+            # make the sure the negotiator runs many times within a single job duration
+            "NEGOTIATOR_INTERVAL": "2",
             # below are the concurrency limits we'll test against
-            "XSW_LIMIT": "2",
+            "XSW_LIMIT": "4",
             "CONCURRENCY_LIMIT_DEFAULT": "2",
             "CONCURRENCY_LIMIT_DEFAULT_SMALL": "3",
             "CONCURRENCY_LIMIT_DEFAULT_LARGE": "1",
@@ -42,7 +43,8 @@ def condor(test_dir):
 
 @pytest.fixture(
     scope="class",
-    params=[("XSW", 2), ("UNDEFINED:2", 1), ("small.license", 3), ("large.license", 1)],
+    params=[("XSW", 4), ("UNDEFINED:2", 1), ("small.license", 3), ("large.license", 1)],
+    ids=["named", "default", "default-small", "default-large"],
 )
 def concurrency_limits_and_max_running(request):
     return request.param
@@ -50,21 +52,20 @@ def concurrency_limits_and_max_running(request):
 
 @pytest.fixture(scope="class")
 def jobids_for_sleep_jobs(test_dir, condor, concurrency_limits_and_max_running):
-    concurrency_limits, _ = concurrency_limits_and_max_running
+    concurrency_limits, max_running = concurrency_limits_and_max_running
 
-    # we need the long-ish sleep to make sure we hit the concurrency limit we
-    # are aiming for
+    # we need the non-zero sleep to make sure we hit the concurrency limit
     sub_description = """
         executable = /bin/sleep
-        arguments = 5
+        arguments = 10
         request_memory = 1MB
         request_disk = 1MB
 
-        concurrency_limits = {}
+        concurrency_limits = {concurrency_limits}
 
-        queue 5
+        queue {num_jobs}
     """.format(
-        concurrency_limits
+        concurrency_limits=concurrency_limits, num_jobs=max_running + 1
     )
     submit_file = write_file(test_dir / "submit" / "job.sub", sub_description)
 
@@ -80,6 +81,27 @@ def jobids_for_sleep_jobs(test_dir, condor, concurrency_limits_and_max_running):
     return jobids
 
 
+@pytest.fixture(scope="class")
+def num_jobs_running_history(
+    condor, jobids_for_sleep_jobs, concurrency_limits_and_max_running
+):
+    _, max_running = concurrency_limits_and_max_running
+
+    num_running = 0
+    num_running_history = []
+    for jobid, event in condor.job_queue.filter(
+        lambda j, e: j in jobids_for_sleep_jobs
+    ):
+        if event == SetJobStatus(JobStatus.Running):
+            num_running += 1
+        elif event == SetJobStatus(JobStatus.Completed):
+            num_running -= 1
+
+        num_running_history.append(num_running)
+
+    return num_running_history
+
+
 class TestConcurrencyLimitsForPSlot:
     def test_all_jobs_ran(self, condor, jobids_for_sleep_jobs):
         for jobid in jobids_for_sleep_jobs:
@@ -92,26 +114,14 @@ class TestConcurrencyLimitsForPSlot:
                 ],
             )
 
-    def test_never_more_jobs_running_than_concurrency_limit_allows(
-        self, condor, jobids_for_sleep_jobs, concurrency_limits_and_max_running
+    def test_never_more_jobs_running_than_limit(
+        self, num_jobs_running_history, concurrency_limits_and_max_running
     ):
         _, max_running = concurrency_limits_and_max_running
+        assert max(num_jobs_running_history) <= max_running
 
-        num_running = 0
-        num_running_history = []
-        for jobid, event in condor.job_queue.filter(
-            lambda j, e: j in jobids_for_sleep_jobs
-        ):
-            # we want to look at only jobs that were submitted in this run
-            if event == SetJobStatus(JobStatus.Running):
-                num_running += 1
-            elif event == SetJobStatus(JobStatus.Completed):
-                num_running -= 1
-
-            num_running_history.append(num_running)
-
-        # it should never be **more**
-        assert max(num_running_history) <= max_running
-
-        # and it should actually hit the max, given our config
-        assert max(num_running_history) == max_running
+    def test_num_jobs_running_hits_limit(
+        self, num_jobs_running_history, concurrency_limits_and_max_running
+    ):
+        _, max_running = concurrency_limits_and_max_running
+        assert max(num_jobs_running_history) == max_running
