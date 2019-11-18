@@ -38,13 +38,7 @@ def finished_sleep_jobid(default_condor, submit_sleep_job_cmd):
     jobid = JobID(clusterid, 0)
 
     default_condor.wait_for_job_queue_events(
-        expected_events={
-            jobid: [
-                SetJobStatus(JobStatus.Idle),
-                SetJobStatus(JobStatus.Running),
-                SetJobStatus(JobStatus.Completed),
-            ]
-        },
+        expected_events={jobid: [SetJobStatus(JobStatus.Completed)]},
         unexpected_events={jobid: {SetJobStatus(JobStatus.Held)}},
     )
 
@@ -64,7 +58,7 @@ class TestCanRunSleepJob:
         _, num_procs = get_submit_result(submit_sleep_job_cmd)
         assert num_procs == 1
 
-    def test_job_events_in_correct_order(self, job_queue_events_for_sleep_job):
+    def test_job_queue_events_in_correct_order(self, job_queue_events_for_sleep_job):
         assert in_order(
             job_queue_events_for_sleep_job,
             [

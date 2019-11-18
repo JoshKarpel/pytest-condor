@@ -26,6 +26,7 @@ from pathlib import Path
 import shutil
 import time
 import functools
+import itertools
 import textwrap
 import collections
 import re
@@ -89,7 +90,7 @@ class SetAttribute:
 
     def _fmt_value(self):
         """Some values can have special formatting depending on the attribute."""
-        if self.attribute == "JobStatus":
+        if self.attribute in ("JobStatus", "LastJobStatus"):
             return str(JobStatus(self.value))
 
         return str(self.value)
@@ -516,11 +517,15 @@ class Condor:
             jobid: set(events) for jobid, events in unexpected_events.items()
         }
 
-        expected_event_sets = {
-            jobid: set(events) for jobid, events in expected_events.items()
-        }
         expected_events = {
-            jobid: collections.deque(events)
+            jobid: collections.deque(
+                event if isinstance(event, tuple) else (event, lambda *_: None)
+                for event in events
+            )
+            for jobid, events in expected_events.items()
+        }
+        expected_event_sets = {
+            jobid: set(e for e, _ in events)
             for jobid, events in expected_events.items()
         }
 
@@ -533,31 +538,35 @@ class Condor:
                 return False
 
             for jobid, event in self.read_events_from_job_queue_log():
+                print()
+                print(event)
                 if event in expected_event_sets.get(jobid, ()):
                     expected_events_for_jobid = expected_events[jobid]
 
-                    next_event, callback = expected_events_for_jobid[0], lambda: None
-                    if isinstance(next_event, tuple):
-                        next_event, callback = next_event
+                    next_event, callback = expected_events_for_jobid[0]
 
                     if event == next_event:
+                        print(event, callback)
                         expected_events_for_jobid.popleft()
-                        callback()
+                        logger.debug(
+                            "Saw expected job queue event for job {}: {}".format(
+                                jobid, event
+                            )
+                        )
+                        callback(jobid, event)
                     else:
                         all_good = False
                         expected_events.pop(jobid)
                         expected_event_sets.pop(jobid)
-
-                    logger.debug(
-                        "Saw expected event for job {}: {}".format(jobid, event)
-                    )
 
                     if len(expected_events_for_jobid) == 0:
                         expected_events.pop(jobid)
                         expected_event_sets.pop(jobid)
 
                         logger.debug(
-                            "Have seen all expected events for job {}".format(jobid)
+                            "Have seen all expected job queue events for job {}".format(
+                                jobid
+                            )
                         )
 
                         # if no more expected event, we're done!
@@ -565,13 +574,13 @@ class Condor:
                             return all_good
                     else:
                         logger.debug(
-                            "Still expecting events for job {}: [{}]".format(
-                                jobid, ", ".join(map(str, expected_events))
+                            "Still expecting job queue events for job {}: [{}]".format(
+                                jobid, ", ".join(map(str, expected_events_for_jobid))
                             )
                         )
                 elif event in unexpected_events.get(jobid, ()):
                     logger.error(
-                        "Saw unexpected event for job {}: {} (was expecting {})".format(
+                        "Saw unexpected job queue event for job {}: {} (was expecting {})".format(
                             jobid, event, expected_events[jobid][0]
                         )
                     )
@@ -680,21 +689,39 @@ _in_order_sentinel = object()
 
 
 def in_order(iterable, expected):
+    iterable = iter(iterable)
+    iterable, backup = itertools.tee(iterable)
+
     expected = list(expected)
     expected_set = set(expected)
-    iter_expected = iter(expected)
-    next_expected = next(iter_expected, _in_order_sentinel)
+    next_expected_idx = 0
 
-    for item in iterable:
+    found_at = {}
+
+    for found_idx, item in enumerate(iterable):
         if item not in expected_set:
             continue
 
-        if item == next_expected:
-            next_expected = next(iter_expected, _in_order_sentinel)
+        if item == expected[next_expected_idx]:
+            found_at[found_idx] = expected[next_expected_idx]
+            next_expected_idx += 1
 
-            if next_expected is _in_order_sentinel:
+            if next_expected_idx == len(expected):
                 # we have seen all the expected events
                 return True
         else:
-            # TODO: log message about what the expectation was vs what we found
-            return False
+            break
+
+    backup = list(backup)
+    msg_lines = ["Items were not in the correct order:"]
+    for idx, item in enumerate(backup):
+        msg = " {:6}  {}".format(idx, item)
+
+        maybe_found = found_at.get(idx)
+        if maybe_found is not None:
+            msg += "  MATCHED  {}".format(maybe_found)
+
+        msg_lines.append(msg)
+
+    logger.error("\n".join(msg_lines))
+    return False
