@@ -25,7 +25,7 @@ def condor(test_dir):
     with Condor(
         local_dir=test_dir / "condor",
         config={
-            "NUM_CPUS": "12",  # should be larger than the number of jobs we plan to submit
+            "NUM_CPUS": "6",  # should be larger than the number of jobs we plan to submit
             "SLOT_TYPE_1": "cpus=100%,memory=100%,disk=100%",
             "SLOT_TYPE_1_PARTITIONABLE": "True",
             "NUM_SLOTS_TYPE_1": "1",
@@ -58,6 +58,7 @@ def jobids_for_sleep_jobs(test_dir, condor, concurrency_limits_and_max_running):
     sub_description = """
         executable = /bin/sleep
         arguments = 10
+        
         request_memory = 1MB
         request_disk = 1MB
 

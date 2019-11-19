@@ -4,7 +4,7 @@ SET CONTAINER_TAG=pytest-condor-test
 
 ECHO Building pytest-condor-test container...
 
-docker build -t %CONTAINER_TAG% .
+docker build -t %CONTAINER_TAG% --file Dockerfile.centos7 .
 
 ECHO Launching pytest-condor-test container...
 

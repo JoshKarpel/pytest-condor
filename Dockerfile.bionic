@@ -13,8 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# this dockerfile builds a test environment for watch
-
 FROM ubuntu:bionic
 
 # switch to root to do root-level config

@@ -6,7 +6,7 @@ set -e
 
 echo "Building pytest-condor-test container..."
 
-docker build --quiet -t ${CONTAINER_TAG} .
+docker build --quiet -t ${CONTAINER_TAG} --file Dockerfile.centos7 .
 
 echo "Launching pytest-condor-test container..."
 
