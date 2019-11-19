@@ -31,7 +31,7 @@ RUN wget https://research.cs.wisc.edu/htcondor/yum/RPM-GPG-KEY-HTCondor \
  && yum install -y condor-all python3-condor \
  && yum clean all
 
-RUN yum install -y python3-pip sudo git vim less where which tmux strace \
+RUN yum install -y python3-pip sudo git vim nano less top htop where which tmux strace \
  && yum clean all
 
 ENV USER=tester
@@ -40,8 +40,7 @@ RUN adduser $USER && usermod -aG wheel $USER && echo "%wheel  ALL=(ALL)   NOPASS
 # switch to submit user, don't need root anymore
 USER ${USER}
 
-RUN pip3 install --no-cache-dir --user pytest
+RUN python3 -m pip install --no-cache-dir --user pytest
 
 WORKDIR /home/tester/pytest-condor
-
 CMD ["bash", "-l"]

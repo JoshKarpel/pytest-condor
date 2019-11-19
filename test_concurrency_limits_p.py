@@ -66,7 +66,7 @@ def jobids_for_sleep_jobs(test_dir, condor, concurrency_limits_and_max_running):
 
         queue {num_jobs}
     """.format(
-        concurrency_limits=concurrency_limits, num_jobs=max_running + 1
+        concurrency_limits=concurrency_limits, num_jobs=max_running + 2
     )
     submit_file = write_file(test_dir / "submit" / "job.sub", sub_description)
 
