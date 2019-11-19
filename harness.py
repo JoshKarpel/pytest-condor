@@ -34,6 +34,9 @@ import enum
 import inspect
 
 
+import htcondor
+
+
 class JobID:
     def __init__(self, cluster, proc):
         self.cluster = int(cluster)
@@ -87,6 +90,23 @@ class SetAttribute:
 
     def __hash__(self):
         return hash((self.__class__, self.attribute, self.value))
+
+    def matches(self, other):
+        return self == other or (
+            (
+                isinstance(other, self.__class__ or isinstance(self, other.__class__))
+                and (
+                    (
+                        (self.attribute is None or other.attribute is None)
+                        and self.value == other.value
+                    )
+                    or (
+                        self.attribute == other.attribute
+                        and (self.value is None or other.value is None)
+                    )
+                )
+            )
+        )
 
     def _fmt_value(self):
         """Some values can have special formatting depending on the attribute."""
@@ -187,6 +207,9 @@ class Condor:
         self.condor_is_ready = False
 
         self.job_queue = JobQueue(self)
+
+    def use_config(self):
+        return SetCondorConfig(self.config_file)
 
     def __repr__(self):
         return "{}(local_dir = {})".format(self.__class__.__name__, self.local_dir)
@@ -452,7 +475,7 @@ class Condor:
         return self.config_file.read_text()
 
     def run_command(self, *args, **kwargs):
-        with SetCondorConfig(self.config_file):
+        with self.use_config():
             return run_command(*args, **kwargs)
 
     @property
@@ -549,7 +572,7 @@ class JobQueue:
 
                     next_event, callback = expected_events_for_jobid[0]
 
-                    if event == next_event:
+                    if event.matches(next_event):
                         expected_events_for_jobid.popleft()
                         logger.debug(
                             "Saw expected job queue event for job {}: {}".format(
@@ -647,6 +670,8 @@ class SetCondorConfig:
         self.previous_value = os.environ.get("CONDOR_CONFIG", None)
         set_env_var("CONDOR_CONFIG", self.config_file.as_posix())
 
+        htcondor.reload_config()
+
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -654,6 +679,8 @@ class SetCondorConfig:
             set_env_var("CONDOR_CONFIG", self.previous_value)
         else:
             unset_env_var("CONDOR_CONFIG")
+
+        htcondor.reload_config()
 
 
 def write_file(path: Path, text: str) -> Path:

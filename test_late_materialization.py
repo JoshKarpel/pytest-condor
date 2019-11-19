@@ -9,11 +9,14 @@ logger.setLevel(logging.DEBUG)
 
 import pytest
 
+import htcondor
+
 from harness import (
     Condor,
     write_file,
     get_submit_result,
     JobID,
+    SetAttribute,
     SetJobStatus,
     JobStatus,
     in_order,
@@ -149,3 +152,73 @@ class TestLateMaterializationLimits:
 
     def test_hit_max_idle_limit(self, num_idle_jobs_history, max_idle, max_materialize):
         assert max(num_idle_jobs_history) == min(max_idle, max_materialize)
+
+
+@pytest.fixture(scope="class")
+def clusterid_for_itemdata(test_dir, condor):
+    # enable late materialization, but with a high enough limit that they all
+    # show up immediately (on hold, because we don't need to actually run
+    # the jobs to do the tests)
+    sub_description = """
+        executable = /bin/sleep
+        arguments = 0
+
+        request_memory = 1MB
+        request_disk = 1MB
+
+        max_materialize = 5
+
+        hold = true
+
+        My.Foo = "$(Item)"
+
+        queue in (A, B, C, D, E)
+    """
+    submit_file = write_file(test_dir / "submit" / "job.sub", sub_description)
+
+    submit_cmd = condor.run_command(["condor_submit", submit_file])
+    clusterid, num_procs = get_submit_result(submit_cmd)
+
+    jobids = [JobID(clusterid, n) for n in range(num_procs)]
+
+    condor.job_queue.wait(
+        {jobid: [SetAttribute("Foo", None)] for jobid in jobids}, timeout=10
+    )
+
+    return clusterid
+
+
+class TestLateMaterializationItemdata:
+    def test_itemdata_turns_into_job_attributes(self, condor, clusterid_for_itemdata):
+        actual = {}
+        for jobid, event in condor.job_queue.filter(
+            lambda j, e: j.cluster == clusterid_for_itemdata
+        ):
+            # the My. doesn't end up being part of the key in the jobad
+            if event.matches(SetAttribute("Foo", None)):
+                actual[jobid] = event.value
+
+        expected = {
+            # first item gets put on the clusterad!
+            JobID(clusterid_for_itemdata, -1): '"A"',
+            JobID(clusterid_for_itemdata, 1): '"B"',
+            JobID(clusterid_for_itemdata, 2): '"C"',
+            JobID(clusterid_for_itemdata, 3): '"D"',
+            JobID(clusterid_for_itemdata, 4): '"E"',
+        }
+
+        assert actual == expected
+
+    def test_query_produces_expected_results(self, condor, clusterid_for_itemdata):
+        with condor.use_config():
+            schedd = htcondor.Schedd()
+            ads = schedd.query(
+                constraint="clusterid == {}".format(clusterid_for_itemdata),
+                # the My. doesn't end up being part of the key in the jobad
+                attr_list=["clusterid", "procid", "foo"],
+            )
+
+        actual = [ad["foo"] for ad in sorted(ads, key=lambda ad: int(ad["procid"]))]
+        expected = list("ABCDE")
+
+        assert actual == expected
