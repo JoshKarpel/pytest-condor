@@ -144,6 +144,7 @@ DEFAULT_PARAMS = {
     "MachineMaxVacateTime": "2",
     "RUNBENCHMARKS": "False",
     "JOB_QUEUE_LOG": "$(SPOOL)/job_queue.log",
+    "MAX_JOB_QUEUE_LOG_ROTATIONS": "0",
     "STARTER_LIST": "STARTER",  # no standard universe starter
 }
 
