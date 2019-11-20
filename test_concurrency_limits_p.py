@@ -43,6 +43,7 @@ def condor(test_dir):
 
 @pytest.fixture(
     scope="class",
+    # these should match the limits expressed in the config
     params=[("XSW", 4), ("UNDEFINED:2", 1), ("small.license", 3), ("large.license", 1)],
     ids=["named", "default", "default-small", "default-large"],
 )

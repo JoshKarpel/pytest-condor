@@ -144,6 +144,7 @@ DEFAULT_PARAMS = {
     "MachineMaxVacateTime": "2",
     "RUNBENCHMARKS": "False",
     "JOB_QUEUE_LOG": "$(SPOOL)/job_queue.log",
+    "STARTER_LIST": "STARTER",  # no standard universe starter
 }
 
 
@@ -193,6 +194,8 @@ class Condor:
         self.log_dir = self.local_dir / "log"
         self.run_dir = self.local_dir / "run"
         self.spool_dir = self.local_dir / "spool"
+        self.passwords_dir = self.local_dir / "passwords.d"
+        self.tokens_dir = self.local_dir / "tokens.d"
 
         self.config_file = self.local_dir / "condor_config"
 
@@ -255,6 +258,8 @@ class Condor:
             self.log_dir,
             self.run_dir,
             self.spool_dir,
+            self.passwords_dir,
+            self.tokens_dir,
         ):
             dir.mkdir(parents=True, exist_ok=False)
             logger.debug("Created dir {}".format(dir))
@@ -284,6 +289,8 @@ class Condor:
             "LOG": self.log_dir.as_posix(),
             "RUN": self.run_dir.as_posix(),
             "SPOOL": self.spool_dir.as_posix(),
+            "SEC_PASSWORD_DIRECTORY": self.passwords_dir.as_posix(),
+            "SEC_TOKEN_SYSTEM_DIRECTORY": self.tokens_dir.as_posix(),
             "STARTD_DEBUG": "D_FULLDEBUG D_COMMAND",
         }
 
@@ -340,7 +347,7 @@ class Condor:
                 )
                 continue
 
-            who = self.run_command(["condor_who", "-quick"], echo=False, suppress=True)
+            who = self.run_command(["condor_who", "-quick"], echo=False, suppress=False)
 
             if who.stdout.strip() == "":
                 logger.warning(
@@ -417,8 +424,11 @@ class Condor:
         start = time.time()
         killed = False
         while True:
-            if self.condor_master.poll() is not None:
+            try:
+                self.condor_master.communicate(timeout=5)
                 break
+            except TimeoutError:
+                pass
 
             elapsed = time.time() - start
 
@@ -439,8 +449,6 @@ class Condor:
                 raise TimeoutError(
                     "Timed out while waiting for condor_master to terminate"
                 )
-
-            time.sleep(5)
 
         logger.debug(
             "condor_master (pid {}) has terminated with exit code {}".format(
@@ -681,6 +689,20 @@ class SetCondorConfig:
             unset_env_var("CONDOR_CONFIG")
 
         htcondor.reload_config()
+
+
+class ChangeDir:
+    def __init__(self, dir: Path):
+        self.dir = dir
+        self.previous_dir = None
+
+    def __enter__(self):
+        self.previous_dir = Path.cwd()
+        os.chdir(self.dir)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        os.chdir(self.previous_dir)
 
 
 def write_file(path: Path, text: str) -> Path:
