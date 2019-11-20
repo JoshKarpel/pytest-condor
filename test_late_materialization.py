@@ -135,7 +135,7 @@ class TestLateMaterializationLimits:
                 ],
             )
 
-    def test_never_more_materialized_than_max_materialize(
+    def test_never_more_materialized_than_max(
         self, num_materialized_jobs_history, max_materialize
     ):
         assert max(num_materialized_jobs_history) <= max_materialize
@@ -145,7 +145,7 @@ class TestLateMaterializationLimits:
     ):
         assert max(num_materialized_jobs_history) == max_materialize
 
-    def test_never_more_idle_than_max_idle(
+    def test_never_more_idle_than_max(
         self, num_idle_jobs_history, max_idle, max_materialize
     ):
         assert max(num_idle_jobs_history) <= min(max_idle, max_materialize)
@@ -185,7 +185,9 @@ def clusterid_for_itemdata(test_dir, condor):
         {jobid: [SetAttribute("Foo", None)] for jobid in jobids}, timeout=10
     )
 
-    return clusterid
+    yield clusterid
+
+    condor.run_command(["condor_rm", clusterid])
 
 
 class TestLateMaterializationItemdata:
