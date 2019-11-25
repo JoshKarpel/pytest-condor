@@ -322,7 +322,7 @@ class Condor:
             )
 
     @skip_if(condor_is_ready)
-    def _wait_for_ready(self, timeout=120, check_delay=10, dump_logs_if_fail=False):
+    def _wait_for_ready(self, timeout=120, check_interval=2, dump_logs_if_fail=False):
         unready_daemons = set(
             self.run_command(
                 ["condor_config_val", "DAEMON_LIST"], echo=False
@@ -336,7 +336,7 @@ class Condor:
 
         start = time.time()
         while time.time() - start < timeout:
-            time.sleep(check_delay)
+            time.sleep(check_interval)
             time_to_give_up = int(timeout - (time.time() - start))
 
             # if the master log does not exist yet, we can't use condor_who
