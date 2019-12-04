@@ -51,12 +51,6 @@ def condor(request, test_dir):
         yield condor
 
 
-@pytest.fixture(scope="class")
-def startd_log_file(condor):
-    with condor.startd_log.open(mode="r") as f:
-        yield f
-
-
 @pytest.fixture(
     scope="class",
     # these should match the limits expressed in the config
@@ -69,7 +63,7 @@ def concurrency_limits_and_max_running(request):
 
 @pytest.fixture(scope="class")
 def jobids_for_sleep_jobs(test_dir, condor, concurrency_limits_and_max_running):
-    concurrency_limits, max_running = concurrency_limits_and_max_running
+    cl, mr = concurrency_limits_and_max_running
 
     # we need the non-zero sleep to make sure we hit the concurrency limit
     sub_description = """
@@ -78,12 +72,12 @@ def jobids_for_sleep_jobs(test_dir, condor, concurrency_limits_and_max_running):
         
         request_memory = 1MB
         request_disk = 1MB
-
+        
         concurrency_limits = {concurrency_limits}
-
+        
         queue {num_jobs}
     """.format(
-        concurrency_limits=concurrency_limits, num_jobs=max_running * 2
+        concurrency_limits=cl, num_jobs=(mr + 1) * 2
     )
     submit_file = write_file(test_dir / "submit" / "job.sub", sub_description)
 
@@ -93,7 +87,17 @@ def jobids_for_sleep_jobs(test_dir, condor, concurrency_limits_and_max_running):
     jobids = [JobID(clusterid, n) for n in range(num_procs)]
 
     condor.job_queue.wait(
-        {jobid: [SetJobStatus(JobStatus.Completed)] for jobid in jobids}, timeout=60
+        {
+            jobid: [
+                (
+                    SetJobStatus(JobStatus.Running),
+                    lambda j, e: condor.run_command(["condor_q"], echo=True),
+                ),
+                SetJobStatus(JobStatus.Completed),
+            ]
+            for jobid in jobids
+        },
+        timeout=60,
     )
 
     yield jobids
@@ -117,6 +121,12 @@ def num_jobs_running_history(condor, jobids_for_sleep_jobs):
 
 
 @pytest.fixture(scope="class")
+def startd_log_file(condor):
+    with condor.startd_log.open(mode="r") as f:
+        yield f
+
+
+@pytest.fixture(scope="class")
 def num_busy_slots_history(
     startd_log_file, jobids_for_sleep_jobs, concurrency_limits_and_max_running
 ):
@@ -134,7 +144,17 @@ def num_busy_slots_history(
             active_claims -= 1
         active_claims_history.append(active_claims)
 
-        print(" {}/{} | {}".format(str(active_claims).rjust(3), max_running, line))
+        print(
+            "{} {}/{} | {}".format(
+                "*"
+                if len(active_claims_history) > 2
+                and active_claims_history[-1] != active_claims_history[-2]
+                else " ",
+                str(active_claims).rjust(2),
+                max_running,
+                line,
+            )
+        )
 
     return active_claims_history
 
@@ -161,7 +181,7 @@ class TestConcurrencyLimits:
         self, num_jobs_running_history, concurrency_limits_and_max_running
     ):
         _, max_running = concurrency_limits_and_max_running
-        assert max(num_jobs_running_history) == max_running
+        assert max_running in num_jobs_running_history
 
     def test_never_more_busy_slots_than_limit(
         self, num_busy_slots_history, concurrency_limits_and_max_running
@@ -173,4 +193,4 @@ class TestConcurrencyLimits:
         self, num_busy_slots_history, concurrency_limits_and_max_running
     ):
         _, max_running = concurrency_limits_and_max_running
-        assert max(num_busy_slots_history) == max_running
+        assert max_running in num_busy_slots_history

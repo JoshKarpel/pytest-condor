@@ -534,6 +534,7 @@ class JobQueue:
         yield from ((j, e) for j, e in self if condition(j, e))
 
     def read_events(self) -> Iterator[Tuple[JobID, Any]]:
+        # TODO: this should probably yield groups of events in transactions, not individual events
         if self._job_queue_log_file is None:
             self._job_queue_log_file = self.condor.job_queue_log.open(mode="r")
 
