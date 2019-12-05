@@ -37,13 +37,13 @@ def job_queue_events_for_sleep_job(default_condor, test_dir):
     default_condor.job_queue.wait(
         {
             jobid: [
-                (
+                (  # when the job starts running, hold it
                     SetJobStatus(JobStatus.Running),
                     lambda jobid, event: default_condor.run_command(
                         ["condor_hold", jobid]
                     ),
                 ),
-                (
+                (  # once the job is held, release it
                     SetJobStatus(JobStatus.Held),
                     lambda jobid, event: default_condor.run_command(
                         ["condor_release", jobid]

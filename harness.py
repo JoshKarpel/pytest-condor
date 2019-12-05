@@ -13,7 +13,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import List, Dict, Mapping, Optional, Callable, Iterator, Tuple, Any
+from typing import (
+    List,
+    Dict,
+    Mapping,
+    Optional,
+    Callable,
+    Iterator,
+    Tuple,
+    Any,
+    Union,
+    Iterable,
+)
 
 import logging
 
@@ -32,7 +43,6 @@ import collections
 import re
 import enum
 import inspect
-
 
 import htcondor
 
@@ -121,7 +131,7 @@ class SetAttribute:
         )
 
     def __str__(self):
-        return "Set {} = {}".format(self.attribute, self._fmt_value())
+        return "Set({} = {})".format(self.attribute, self._fmt_value())
 
 
 def SetJobStatus(new_status):
@@ -348,7 +358,7 @@ class Condor:
                 )
                 continue
 
-            who = self.run_command(["condor_who", "-quick"], echo=False, suppress=False)
+            who = self.run_command(["condor_who", "-quick"], echo=False, suppress=True)
 
             if who.stdout.strip() == "":
                 logger.warning(
@@ -380,7 +390,8 @@ class Condor:
                     )
                 )
 
-        logger.error("Failed to start daemons: ")
+        logger.error("Failed to start daemons: {}".format(" ".join(unready_daemons)))
+        self.run_command(["condor_who", "-quick"])
         if dump_logs_if_fail:
             for logfile in self.log_dir.iterdir():
                 logger.error("Contents of {}:\n{}".format(logfile, logfile.read_text()))
@@ -513,7 +524,7 @@ class Condor:
 
     def _get_log_path(self, daemon: str) -> Path:
         p = self.run_command(
-            ["condor_config_val", "{}_LOG".format(daemon)], echo=False
+            ["condor_config_val", "{}_LOG".format(daemon)], echo=False, suppress=True
         ).stdout
         return Path(p)
 
@@ -533,20 +544,50 @@ class JobQueue:
     def filter(self, condition):
         yield from ((j, e) for j, e in self if condition(j, e))
 
-    def read_events(self) -> Iterator[Tuple[JobID, Any]]:
-        # TODO: this should probably yield groups of events in transactions, not individual events
+    def read_events(self) -> Iterator[List[Tuple[JobID, SetAttribute]]]:
+        """Yield transactions (i.e., lists) of (jobid, event) pairs from the job queue log."""
         if self._job_queue_log_file is None:
             self._job_queue_log_file = self.condor.job_queue_log.open(mode="r")
 
-        for line in self._job_queue_log_file:
-            x = parse_job_queue_log_line(line)
-            if x is not None:
-                jobid, event = x
+        acc = []
+        for jobid, event in map(parse_job_queue_log_line, self._job_queue_log_file):
+            if event is START_TRANSACTION:
+                acc = []
+            elif event is END_TRANSACTION:
+                yield acc
+            elif isinstance(jobid, JobID) and isinstance(event, SetAttribute):
                 self.events.append((jobid, event))
                 self.by_jobid[jobid].append(event)
-                yield x
+                acc.append((jobid, event))
 
     def wait(self, expected_events, unexpected_events=None, timeout: int = 60):
+        """
+        Wait for job queue events to occur.
+
+        This method is primarily intended for test setup; see :func:`in_order`
+        for a way to assert that job queue events occurred in a certain
+        order post-facto.
+
+        All this method cares about is what the *next* event is for a particular jobid.
+        If events come out of order, it will not record the out-of-order ones!
+
+        This method never raises an exception intentionally, even when it times out.
+        It simply returns control to the test, so that the test itself can
+        declare failure.
+
+
+        Parameters
+        ----------
+        expected_events
+        unexpected_events
+        timeout
+
+        Returns
+        -------
+        all_good
+            ``True`` is all events occurred and no unexpected events occurred.
+            ``False`` if it timed out, or if any unexpected events occurred.
+        """
         all_good = True
 
         if unexpected_events is None:
@@ -563,69 +604,92 @@ class JobQueue:
             )
             for jobid, events in expected_events.items()
         }
-        expected_event_sets = {
-            jobid: set(e for e, _ in events)
-            for jobid, events in expected_events.items()
-        }
+
+        jobids = set(expected_events.keys())
 
         start = time.time()
 
         while True:
             elapsed = time.time() - start
             if elapsed > timeout:
-                # TODO: add more info in error here
+                logger.error("Job queue event wait ending due to timeout!")
                 return False
 
-            for jobid, event in self.read_events():
-                if event in expected_event_sets.get(jobid, ()):
+            for transaction in self.read_events():
+                for jobid, event in transaction:
+                    if jobid not in jobids:
+                        continue
+
+                    if event in unexpected_events.get(jobid, ()):
+                        logger.error(
+                            "Saw unexpected job queue event for job {}: {} (was expecting {})".format(
+                                jobid, event, expected_events[jobid][0]
+                            )
+                        )
+                        all_good = False
+                        continue
+
                     expected_events_for_jobid = expected_events[jobid]
+                    if len(expected_events_for_jobid) == 0:
+                        continue
 
                     next_event, callback = expected_events_for_jobid[0]
 
-                    if event.matches(next_event):
-                        expected_events_for_jobid.popleft()
-                        logger.debug(
-                            "Saw expected job queue event for job {}: {}".format(
-                                jobid, event
-                            )
+                    if not event.matches(next_event):
+                        continue
+
+                    logger.debug(
+                        "Saw expected job queue event for job {}: {}".format(
+                            jobid, event
                         )
-                        callback(jobid, event)
-                    else:
-                        all_good = False
-                        expected_events.pop(jobid)
-                        expected_event_sets.pop(jobid)
+                    )
+                    expected_events_for_jobid.popleft()
+                    callback(jobid, event)
 
                     if len(expected_events_for_jobid) == 0:
-                        expected_events.pop(jobid)
-                        expected_event_sets.pop(jobid)
-
                         logger.debug(
                             "Have seen all expected job queue events for job {}".format(
                                 jobid
                             )
                         )
-
-                        # if no more expected event, we're done!
-                        if len(expected_events) == 0:
-                            return all_good
                     else:
                         logger.debug(
                             "Still expecting job queue events for job {}: [{}]".format(
-                                jobid, ", ".join(map(str, expected_events_for_jobid))
+                                jobid,
+                                ", ".join(str(e) for e, _ in expected_events_for_jobid),
                             )
                         )
-                elif event in unexpected_events.get(jobid, ()):
-                    logger.error(
-                        "Saw unexpected job queue event for job {}: {} (was expecting {})".format(
-                            jobid, event, expected_events[jobid][0]
+
+                # if no more expected event, we're done!
+                if all(len(events) == 0 for events in expected_events.values()):
+                    logger.debug(
+                        "Job queue event wait exiting with goodness: {}".format(
+                            all_good
                         )
                     )
+                    return all_good
+
             time.sleep(0.1)
 
 
 def run_command(
     args: List[str], stdin=None, timeout: int = 60, echo=True, suppress=False
 ):
+    """
+    Execute a command.
+
+    Parameters
+    ----------
+    args
+    stdin
+    timeout
+    echo
+    suppress
+
+    Returns
+    -------
+
+    """
     if timeout is None:
         raise TypeError("run_command timeout cannot be None")
 
@@ -672,6 +736,12 @@ def unset_env_var(key):
 
 
 class SetCondorConfig:
+    """
+    A context manager. Inside the block, the Condor config file is the one given
+    to the constructor. After the block, it is reset to whatever it was before
+    the block was entered.
+    """
+
     def __init__(self, config_file: Path):
         self.config_file = Path(config_file)
         self.previous_value = None
@@ -694,6 +764,12 @@ class SetCondorConfig:
 
 
 class ChangeDir:
+    """
+    A context manager. Inside the block, the current working directory is changed
+    to whatever is given to the constructor. After the block, it is reset to
+    where it was when the block was entered.
+    """
+
     def __init__(self, dir: Path):
         self.dir = dir
         self.previous_dir = None
@@ -708,6 +784,20 @@ class ChangeDir:
 
 
 def write_file(path: Path, text: str) -> Path:
+    """
+    Write the given ``text`` to a new file at the given ``path``, stomping
+    anything that might exist there.
+
+    Parameters
+    ----------
+    path
+    text
+
+    Returns
+    -------
+    path
+        The path the file was written to (as an absolute path).
+    """
     path = Path(path).absolute()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(textwrap.dedent(text))
@@ -718,6 +808,18 @@ RE_SUBMIT_RESULT = re.compile(r"(\d+) job\(s\) submitted to cluster (\d+)\.")
 
 
 def get_submit_result(submit_cmd: subprocess.CompletedProcess) -> Tuple[int, int]:
+    """
+    Get a "submit result" from a ``condor_submit`` command run via
+    :func:`run_command`.
+
+    Parameters
+    ----------
+    submit_cmd
+
+    Returns
+    -------
+
+    """
     match = RE_SUBMIT_RESULT.search(submit_cmd.stdout)
     if match is not None:
         num_procs = int(match.group(1))
@@ -731,23 +833,63 @@ def get_submit_result(submit_cmd: subprocess.CompletedProcess) -> Tuple[int, int
     )
 
 
-def parse_job_queue_log_line(line: str):
+START_TRANSACTION = object()
+END_TRANSACTION = object()
+
+
+def parse_job_queue_log_line(
+    line: str
+) -> Tuple[Optional[JobID], Optional[Union[SetAttribute, Any]]]:
     parts = line.strip().split(" ", 3)
 
-    if parts[0] == "103":
+    event_type = parts[0]
+    if event_type == "103":
         return JobID(*parts[1].split(".")), SetAttribute(parts[2], parts[3])
+    elif event_type == "105":
+        return None, START_TRANSACTION
+    elif event_type == "106":
+        return None, END_TRANSACTION
+
+    return None, None
 
 
 def get_current_func_name() -> str:
+    """
+    Return the name of the function this function is called from.
+
+    ::
+        def foo():
+            print(get_current_func_name())
+
+        foo()  # prints "foo"
+
+    """
     return inspect.currentframe().f_back.f_code.co_name
 
 
 _in_order_sentinel = object()
 
 
-def in_order(iterable, expected):
-    iterable = iter(iterable)
-    iterable, backup = itertools.tee(iterable)
+def in_order(items: Iterable[Any], expected) -> bool:
+    """
+    Given an iterable of items and a list of expected items, return ``True``
+    if and only if the items occur in exactly the given order. Extra items may
+    appear between expected items, but expected items may not appear out of order.
+
+    When this function returns ``False``, it emits a detailed log message at
+    ERROR level showing a "match" display for debugging.
+
+    Parameters
+    ----------
+    items
+    expected
+
+    Returns
+    -------
+
+    """
+    items = iter(items)
+    items, backup = itertools.tee(items)
 
     expected = list(expected)
     expected_set = set(expected)
@@ -755,7 +897,7 @@ def in_order(iterable, expected):
 
     found_at = {}
 
-    for found_idx, item in enumerate(iterable):
+    for found_idx, item in enumerate(items):
         if item not in expected_set:
             continue
 
@@ -776,6 +918,7 @@ def in_order(iterable, expected):
 
         maybe_found = found_at.get(idx)
         if maybe_found is not None:
+            msg = "*" + msg[1:]
             msg += "  MATCHED  {}".format(maybe_found)
 
         msg_lines.append(msg)

@@ -28,8 +28,8 @@ def condor(test_dir):
     with Condor(
         local_dir=test_dir / "condor",
         config={
-            "NUM_CPUS": "5",
-            "NUM_SLOTS": "5",  # must be larger than the max number of jobs we hope to materialize
+            "NUM_CPUS": "10",
+            "NUM_SLOTS": "10",  # must be larger than the max number of jobs we hope to materialize
             "SCHEDD_MATERIALIZE_LOG": "$(LOG)/MaterializeLog",
             "SCHEDD_DEBUG": "D_MATERIALIZE:2 D_CAT $(SCHEDD_DEBUG)",
         },
@@ -37,7 +37,7 @@ def condor(test_dir):
         yield condor
 
 
-_max_idle = [3, 2]
+_max_idle = [2, 3, 5]
 
 
 @pytest.fixture(
@@ -47,13 +47,13 @@ def max_idle(request):
     return request.param
 
 
-_max_materialize = [3, 2]
+_max_materialize = [2, 3, 5]
 
 
 @pytest.fixture(
     scope="class",
     params=_max_materialize,
-    ids=["max_materialize={}".format(p) for p in _max_idle],
+    ids=["max_materialize={}".format(p) for p in _max_materialize],
 )
 def max_materialize(request):
     return request.param
