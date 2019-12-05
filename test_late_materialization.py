@@ -11,7 +11,7 @@ import pytest
 
 import htcondor
 
-from harness import (
+from ornithology import (
     Condor,
     write_file,
     get_submit_result,

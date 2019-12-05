@@ -13,25 +13,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from pathlib import Path
+import logging
 
-import pytest
+import inspect
 
-from ornithology import Condor
-
-
-TESTS_DIR = Path.home() / "tests"
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 
-@pytest.fixture(scope="class")
-def test_dir(request):
-    if request.cls is not None:
-        return TESTS_DIR / request.cls.__name__
+def get_current_func_name() -> str:
+    """
+    Return the name of the function this function is called from.
 
-    return TESTS_DIR / request.function.__name__
+    ::
+        def foo():
+            print(get_current_func_name())
 
+        foo()  # prints "foo"
 
-@pytest.fixture(scope="class")
-def default_condor(test_dir):
-    with Condor(local_dir=test_dir / "condor") as condor:
-        yield condor
+    """
+    return inspect.currentframe().f_back.f_code.co_name

@@ -7,7 +7,7 @@ logger.setLevel(logging.DEBUG)
 
 import pytest
 
-from harness import (
+from ornithology import (
     write_file,
     get_submit_result,
     JobID,

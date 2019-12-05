@@ -13,25 +13,32 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
+
+import textwrap
 from pathlib import Path
 
-import pytest
 
-from ornithology import Condor
+def write_file(path: Path, text: str) -> Path:
+    """
+    Write the given ``text`` to a new file at the given ``path``, stomping
+    anything that might exist there.
 
+    Parameters
+    ----------
+    path
+    text
 
-TESTS_DIR = Path.home() / "tests"
-
-
-@pytest.fixture(scope="class")
-def test_dir(request):
-    if request.cls is not None:
-        return TESTS_DIR / request.cls.__name__
-
-    return TESTS_DIR / request.function.__name__
-
-
-@pytest.fixture(scope="class")
-def default_condor(test_dir):
-    with Condor(local_dir=test_dir / "condor") as condor:
-        yield condor
+    Returns
+    -------
+    path
+        The path the file was written to (as an absolute path).
+    """
+    path = Path(path).absolute()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(textwrap.dedent(text))
+    return path
