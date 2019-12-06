@@ -17,14 +17,14 @@ from typing import Mapping, Callable
 
 import logging
 
-
 import subprocess
 from pathlib import Path
 import shutil
 import time
 import functools
+import shlex
 
-from . import job_queue, env, cmd
+from . import job_queue, env, cmd, daemon
 
 
 logger = logging.getLogger(__name__)
@@ -224,65 +224,66 @@ class Condor:
             )
 
     @skip_if(condor_is_ready)
-    def _wait_for_ready(self, timeout=120, check_interval=2, dump_logs_if_fail=False):
-        unready_daemons = set(
+    def _wait_for_ready(self, timeout=120, dump_logs_if_fail=False):
+        daemons = set(
             self.run_command(
                 ["condor_config_val", "DAEMON_LIST"], echo=False
             ).stdout.split(" ")
         )
+
         logger.debug(
             "Starting up daemons for {}, waiting for: {}".format(
-                self, " ".join(sorted(unready_daemons))
+                self, " ".join(sorted(daemons))
             )
         )
 
         start = time.time()
         while time.time() - start < timeout:
-            time.sleep(check_interval)
             time_to_give_up = int(timeout - (time.time() - start))
 
             # if the master log does not exist yet, we can't use condor_who
-            if not self.master_log.exists():
+            if not self.master_log.path.exists():
                 logger.debug(
                     "MASTER_LOG at {} does not yet exist for {} (giving up in {} seconds)".format(
                         self.master_log, self, time_to_give_up
                     )
                 )
+                time.sleep(1)
                 continue
 
-            who = self.run_command(["condor_who", "-quick"], echo=False, suppress=True)
-
+            who = self.run_command(
+                shlex.split(
+                    "condor_who -wait:10 'IsReady && STARTD_State == \"Ready\"'"
+                ),
+                echo=False,
+                suppress=True,
+            )
             if who.stdout.strip() == "":
                 logger.warning(
                     "condor_who stdout was unexpectedly blank for {}, retrying (giving up in {} seconds)".format(
                         self, time_to_give_up
                     )
                 )
+                time.sleep(1)
                 continue
 
             who_ad = dict(kv.split(" = ") for kv in who.stdout.splitlines())
 
-            if who_ad.get("IsReady") == "true":
+            logger.debug(str(who_ad))
+            if (
+                who_ad.get("IsReady") == "true"
+                and who_ad.get("STARTD_State") == '"Ready"'
+                and all(who_ad.get(d) == '"Alive"' for d in daemons)
+            ):
                 self.condor_is_ready = True
                 return
 
-            for k, v in who_ad.items():
-                if v == '"Alive"':
-                    unready_daemons.discard(k)
-
             logger.debug(
-                "{} is waiting for daemons to be ready (giving up in {} seconds): {}".format(
-                    self, time_to_give_up, " ".join(sorted(unready_daemons))
+                "{} is waiting for daemons to be ready (giving up in {} seconds)".format(
+                    self, time_to_give_up
                 )
             )
-            for d in sorted(unready_daemons):
-                logger.debug(
-                    "Status of Daemon {} (pid {}) for {}: {}".format(
-                        d, who_ad[d + "_PID"], self, who_ad[d]
-                    )
-                )
 
-        logger.error("Failed to start daemons: {}".format(" ".join(unready_daemons)))
         self.run_command(["condor_who", "-quick"])
         if dump_logs_if_fail:
             for logfile in self.log_dir.iterdir():
@@ -379,10 +380,6 @@ class Condor:
             "Sent kill signal to condor_master (pid {})".format(self.condor_master.pid)
         )
 
-    # def _remove_local_dir(self):
-    #     shutil.rmtree(self.local_dir)
-    #     logger.debug("Removed local dir {}".format(self.local_dir))
-
     def read_config(self):
         return self.config_file.read_text()
 
@@ -391,31 +388,34 @@ class Condor:
             return cmd.run_command(*args, **kwargs)
 
     @property
-    def master_log(self) -> Path:
-        return self._get_log_path("MASTER")
+    def master_log(self) -> daemon.DaemonLog:
+        return self._get_daemon_log("MASTER")
 
     @property
-    def collector_log(self) -> Path:
-        return self._get_log_path("COLLECTOR")
+    def collector_log(self) -> daemon.DaemonLog:
+        return self._get_daemon_log("COLLECTOR")
 
     @property
-    def negotiator_log(self) -> Path:
-        return self._get_log_path("NEGOTIATOR")
+    def negotiator_log(self) -> daemon.DaemonLog:
+        return self._get_daemon_log("NEGOTIATOR")
 
     @property
-    def schedd_log(self) -> Path:
-        return self._get_log_path("SCHEDD")
+    def schedd_log(self) -> daemon.DaemonLog:
+        return self._get_daemon_log("SCHEDD")
 
     @property
-    def startd_log(self) -> Path:
-        return self._get_log_path("STARTD")
+    def startd_log(self) -> daemon.DaemonLog:
+        return self._get_daemon_log("STARTD")
 
     @property
     def job_queue_log(self) -> Path:
         return self._get_log_path("JOB_QUEUE")
 
-    def _get_log_path(self, daemon: str) -> Path:
+    def _get_log_path(self, log_type: str) -> Path:
         p = self.run_command(
-            ["condor_config_val", "{}_LOG".format(daemon)], echo=False, suppress=True
+            ["condor_config_val", "{}_LOG".format(log_type)], echo=False, suppress=True
         ).stdout
         return Path(p)
+
+    def _get_daemon_log(self, daemon_name: str) -> daemon.DaemonLog:
+        return daemon.DaemonLog(self._get_log_path(daemon_name))

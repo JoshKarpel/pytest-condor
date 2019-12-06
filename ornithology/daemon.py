@@ -13,17 +13,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import List, Tuple
+
 import logging
+
+
+import os
+import subprocess
+import re
+
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
-logger.addHandler(logging.NullHandler())
 
-from .cmd import run_command, get_submit_result
-from .condor import Condor
-from .env import SetEnv, SetCondorConfig
-from .helpers import in_order
-from .io import write_file
-from .job_queue import SetAttribute, SetJobStatus, JobQueue
-from .jobs import JobID, JobStatus
-from .meta import get_current_func_name
+
+class DaemonLog:
+    def __init__(self, path):
+        self.path = path

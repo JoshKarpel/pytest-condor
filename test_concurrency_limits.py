@@ -122,7 +122,7 @@ def num_jobs_running_history(condor, jobids_for_sleep_jobs):
 
 @pytest.fixture(scope="class")
 def startd_log_file(condor):
-    with condor.startd_log.open(mode="r") as f:
+    with condor.startd_log.path.open(mode="r") as f:
         yield f
 
 

@@ -18,12 +18,12 @@ import logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-
 import textwrap
 from pathlib import Path
 
 
-def write_file(path: Path, text: str) -> Path:
+# TODO: does this way of doing permissions work on Windows?
+def write_file(path: Path, text: str, permissions: int = 0o777) -> Path:
     """
     Write the given ``text`` to a new file at the given ``path``, stomping
     anything that might exist there.
@@ -32,6 +32,7 @@ def write_file(path: Path, text: str) -> Path:
     ----------
     path
     text
+    permissions
 
     Returns
     -------
@@ -41,4 +42,5 @@ def write_file(path: Path, text: str) -> Path:
     path = Path(path).absolute()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(textwrap.dedent(text))
+    path.chmod(permissions)
     return path
