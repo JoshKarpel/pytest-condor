@@ -26,9 +26,11 @@ TESTS_DIR = Path.home() / "tests"
 @pytest.fixture(scope="class")
 def test_dir(request):
     if request.cls is not None:
-        return TESTS_DIR / request.cls.__name__
+        dir = TESTS_DIR / request.cls.__name__
+    else:
+        dir = TESTS_DIR / request.function.__name__
 
-    return TESTS_DIR / request.function.__name__
+    return dir
 
 
 @pytest.fixture(scope="class")

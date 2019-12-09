@@ -23,6 +23,7 @@ import shutil
 import time
 import functools
 import shlex
+import re
 
 import htcondor
 
@@ -46,7 +47,7 @@ DEFAULT_PARAMS = {
     "STARTER_INITIAL_UPDATE_INTERVAL": "2",
     "NEGOTIATOR_CYCLE_DELAY": "2",
     "MachineMaxVacateTime": "2",
-    "RUNBENCHMARKS": "False",
+    "RUNBENCHMARKS": "0",
     "JOB_QUEUE_LOG": "$(SPOOL)/job_queue.log",
     "MAX_JOB_QUEUE_LOG_ROTATIONS": "0",
     "STARTER_LIST": "STARTER",  # no standard universe starter
@@ -229,6 +230,7 @@ class Condor:
                 ["condor_config_val", "DAEMON_LIST"], echo=False
             ).stdout.split(" ")
         )
+        master_log_path = self.master_log.path
 
         logger.debug(
             "Starting up daemons for {}, waiting for: {}".format(
@@ -241,15 +243,16 @@ class Condor:
             time_to_give_up = int(timeout - (time.time() - start))
 
             # if the master log does not exist yet, we can't use condor_who
-            if not self.master_log.path.exists():
+            if not master_log_path.exists():
                 logger.debug(
-                    "MASTER_LOG at {} does not yet exist for {} (giving up in {} seconds)".format(
+                    "MASTER_LOG at {} does not yet exist for {}, retrying in 1 seconds (giving up in {} seconds)".format(
                         self.master_log, self, time_to_give_up
                     )
                 )
                 time.sleep(1)
                 continue
 
+            # TODO: what if we aren't starting up a startd?
             who = self.run_command(
                 shlex.split(
                     "condor_who -wait:10 'IsReady && STARTD_State =?= \"Ready\"'"
@@ -258,8 +261,8 @@ class Condor:
                 suppress=True,
             )
             if who.stdout.strip() == "":
-                logger.warning(
-                    "condor_who stdout was unexpectedly blank for {}, retrying (giving up in {} seconds)".format(
+                logger.debug(
+                    "condor_who stdout was unexpectedly blank for {}, retrying in 1 second (giving up in {} seconds)".format(
                         self, time_to_give_up
                     )
                 )
@@ -268,6 +271,7 @@ class Condor:
 
             who_ad = dict(kv.split(" = ") for kv in who.stdout.splitlines())
 
+            # TODO: same as above - what if we aren't starting up a startd?
             if (
                 who_ad.get("IsReady") == "true"
                 and who_ad.get("STARTD_State") == '"Ready"'
@@ -409,36 +413,97 @@ class Condor:
     def job_queue_log(self) -> Path:
         return self._get_log_path("JOB_QUEUE")
 
-    def _get_log_path(self, log_type) -> Path:
-        p = self.run_command(
-            ["condor_config_val", "{}_LOG".format(log_type)], echo=False, suppress=True
-        ).stdout
-        return Path(p)
+    @property
+    def startd_address(self):
+        return self._get_address_file("STARTD").read_text().splitlines()[0]
+
+    def _get_log_path(self, subsystem):
+        return self._get_path_from_condor_config_val("{}_LOG".format(subsystem))
+
+    def _get_address_file(self, subsystem):
+        return self._get_path_from_condor_config_val(
+            "{}_ADDRESS_FILE".format(subsystem)
+        )
+
+    def _get_path_from_condor_config_val(self, attr):
+        return Path(
+            self.run_command(
+                ["condor_config_val", attr], echo=False, suppress=True
+            ).stdout
+        )
 
     def _get_daemon_log(self, daemon_name):
         return daemon.DaemonLog(self._get_log_path(daemon_name))
+
+    def get_local_schedd(self):
+        with self.use_config():
+            return htcondor.Schedd()
+
+    def get_local_collector(self):
+        with self.use_config():
+            return htcondor.Collector()
 
     def status(self, ad_type=htcondor.AdTypes.Any, constraint="true", projection=None):
         projection = projection or []
 
         with self.use_config():
-            coll = htcondor.Collector()
-            return coll.query(
+            result = self.get_local_collector().query(
                 ad_type=ad_type, constraint=constraint, projection=projection
             )
+
+        logger.debug(
+            'Ads returned by status query for {} ads with constraint "{}":\n'.format(
+                ad_type, constraint
+            )
+            + "\n".join(str(ad) for ad in result)
+        )
+
+        return result
+
+    def direct_status(self, daemon_type, ad_type, constraint="true", projection=None):
+        projection = projection or []
+
+        # TODO: we would like this to use Collector.directQuery, but it can't because of https://htcondor-wiki.cs.wisc.edu/index.cgi/tktview?tn=7420
+
+        with self.use_config():
+            target = self.get_local_collector().locate(daemon_type)
+
+            # pretend the target is a collector so we can query it
+            result = htcondor.Collector(target["MyAddress"]).query(
+                ad_type=ad_type, constraint=constraint, projection=projection
+            )
+
+        logger.debug(
+            'Ads returned by direct status query against {} for {} ads with constraint "{}":\n'.format(
+                daemon_type, ad_type, constraint
+            )
+            + "\n".join(str(ad) for ad in result)
+        )
+
+        return result
 
     def q(
         self,
         constraint="true",
         projection=None,
-        limit=None,
+        limit=-1,
         opts=htcondor.QueryOpts.Default,
     ):
-        if limit is None:
-            limit = -1
-
         with self.use_config():
-            schedd = htcondor.Schedd()
-            return schedd.query(
+            result = self.get_local_schedd().query(
                 constraint=constraint, attr_list=projection, limit=limit, opts=opts
             )
+
+        logger.debug(
+            'Ads returned by queue query with constraint "{}":\n'.format(constraint)
+            + "\n".join(str(ad) for ad in result)
+        )
+
+        return result
+
+
+RE_PORT_HOST = re.compile(r"\d+\.\d+\.\d+\.\d+:\d+")
+
+
+def get_port_host_from_sinful(sinful):
+    return RE_PORT_HOST.search(sinful)[0]

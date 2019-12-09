@@ -20,7 +20,7 @@ logger.setLevel(logging.DEBUG)
 logger.addHandler(logging.NullHandler())
 
 from .cmd import run_command, parse_submit_result
-from .condor import Condor
+from .condor import Condor, get_port_host_from_sinful
 from .env import SetEnv, SetCondorConfig
 from .helpers import in_order
 from .io import write_file

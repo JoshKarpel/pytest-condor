@@ -28,7 +28,7 @@ logger.setLevel(logging.DEBUG)
 
 
 def run_command(
-    args: List[str], stdin=None, timeout: int = 60, echo=True, suppress=False
+    args: List[str], stdin=None, timeout: int = 60, echo=False, suppress=False
 ):
     """
     Execute a command.
