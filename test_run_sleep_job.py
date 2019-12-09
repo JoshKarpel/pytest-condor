@@ -9,7 +9,7 @@ import pytest
 
 from ornithology import (
     write_file,
-    get_submit_result,
+    parse_submit_result,
     JobID,
     SetAttribute,
     SetJobStatus,
@@ -33,7 +33,7 @@ def submit_sleep_job_cmd(default_condor, test_dir):
 
 @pytest.fixture(scope="class")
 def finished_sleep_jobid(default_condor, submit_sleep_job_cmd):
-    clusterid, num_procs = get_submit_result(submit_sleep_job_cmd)
+    clusterid, num_procs = parse_submit_result(submit_sleep_job_cmd)
 
     jobid = JobID(clusterid, 0)
 
@@ -55,7 +55,7 @@ class TestCanRunSleepJob:
         assert submit_sleep_job_cmd.returncode == 0
 
     def test_only_one_proc(self, submit_sleep_job_cmd):
-        _, num_procs = get_submit_result(submit_sleep_job_cmd)
+        _, num_procs = parse_submit_result(submit_sleep_job_cmd)
         assert num_procs == 1
 
     def test_job_queue_events_in_correct_order(self, job_queue_events_for_sleep_job):

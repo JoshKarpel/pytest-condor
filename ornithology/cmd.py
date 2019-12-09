@@ -80,7 +80,7 @@ def run_command(
 RE_SUBMIT_RESULT = re.compile(r"(\d+) job\(s\) submitted to cluster (\d+)\.")
 
 
-def get_submit_result(submit_cmd: subprocess.CompletedProcess) -> Tuple[int, int]:
+def parse_submit_result(submit_cmd: subprocess.CompletedProcess) -> Tuple[int, int]:
     """
     Get a "submit result" from a ``condor_submit`` command run via
     :func:`run_command`.

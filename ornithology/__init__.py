@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 logger.addHandler(logging.NullHandler())
 
-from .cmd import run_command, get_submit_result
+from .cmd import run_command, parse_submit_result
 from .condor import Condor
 from .env import SetEnv, SetCondorConfig
 from .helpers import in_order

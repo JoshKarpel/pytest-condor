@@ -14,7 +14,7 @@ import htcondor
 from ornithology import (
     Condor,
     write_file,
-    get_submit_result,
+    parse_submit_result,
     JobID,
     SetAttribute,
     SetJobStatus,
@@ -78,7 +78,7 @@ def jobids_for_sleep_jobs(test_dir, condor, max_idle, max_materialize):
     submit_file = write_file(test_dir / "submit" / "job.sub", sub_description)
 
     submit_cmd = condor.run_command(["condor_submit", submit_file])
-    clusterid, num_procs = get_submit_result(submit_cmd)
+    clusterid, num_procs = parse_submit_result(submit_cmd)
 
     jobids = [JobID(clusterid, n) for n in range(num_procs)]
 
@@ -177,7 +177,7 @@ def clusterid_for_itemdata(test_dir, condor):
     submit_file = write_file(test_dir / "submit" / "job.sub", sub_description)
 
     submit_cmd = condor.run_command(["condor_submit", submit_file])
-    clusterid, num_procs = get_submit_result(submit_cmd)
+    clusterid, num_procs = parse_submit_result(submit_cmd)
 
     jobids = [JobID(clusterid, n) for n in range(num_procs)]
 

@@ -24,6 +24,8 @@ import time
 import functools
 import shlex
 
+import htcondor
+
 from . import job_queue, env, cmd, daemon
 
 
@@ -51,19 +53,19 @@ DEFAULT_PARAMS = {
 }
 
 
-def master_is_not_alive(self) -> bool:
+def master_is_not_alive(self):
     return not self.master_is_alive
 
 
-def condor_is_ready(self) -> bool:
+def condor_is_ready(self):
     return self.condor_is_ready
 
 
-def condor_master_was_started(self) -> bool:
+def condor_master_was_started(self):
     return self.condor_master is not None
 
 
-def skip_if(condition: Callable[["Condor"], bool]):
+def skip_if(condition):
     def decorator(func):
         @functools.wraps(func)
         def wrapper(self, *args, **kwargs):
@@ -84,11 +86,7 @@ def skip_if(condition: Callable[["Condor"], bool]):
 
 class Condor:
     def __init__(
-        self,
-        local_dir: Path,
-        config: Mapping[str, str] = None,
-        raw_config: str = None,
-        clean_local_dir_before: bool = True,
+        self, local_dir: Path, config=None, raw_config=None, clean_local_dir_before=True
     ):
         self.local_dir = local_dir
 
@@ -121,12 +119,11 @@ class Condor:
         return "{}(local_dir = {})".format(self.__class__.__name__, self.local_dir)
 
     @property
-    def master_is_alive(self) -> bool:
+    def master_is_alive(self):
         return self.condor_master is not None and self.condor_master.poll() is None
 
-    def __enter__(self) -> "Condor":
+    def __enter__(self):
         self._start()
-
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -171,7 +168,9 @@ class Condor:
         # TODO: how to ensure that this always hits the right config?
         # TODO: switch to -summary instead of -write:up
         write = cmd.run_command(
-            ["condor_config_val", "-write:up", self.config_file.as_posix()], echo=False
+            ["condor_config_val", "-write:up", self.config_file.as_posix()],
+            echo=False,
+            suppress=True,
         )
         if write.returncode != 0:
             raise Exception("Failed to copy base OS config: {}".format(write.stderr))
@@ -253,7 +252,7 @@ class Condor:
 
             who = self.run_command(
                 shlex.split(
-                    "condor_who -wait:10 'IsReady && STARTD_State == \"Ready\"'"
+                    "condor_who -wait:10 'IsReady && STARTD_State =?= \"Ready\"'"
                 ),
                 echo=False,
                 suppress=True,
@@ -269,7 +268,6 @@ class Condor:
 
             who_ad = dict(kv.split(" = ") for kv in who.stdout.splitlines())
 
-            logger.debug(str(who_ad))
             if (
                 who_ad.get("IsReady") == "true"
                 and who_ad.get("STARTD_State") == '"Ready"'
@@ -411,11 +409,36 @@ class Condor:
     def job_queue_log(self) -> Path:
         return self._get_log_path("JOB_QUEUE")
 
-    def _get_log_path(self, log_type: str) -> Path:
+    def _get_log_path(self, log_type) -> Path:
         p = self.run_command(
             ["condor_config_val", "{}_LOG".format(log_type)], echo=False, suppress=True
         ).stdout
         return Path(p)
 
-    def _get_daemon_log(self, daemon_name: str) -> daemon.DaemonLog:
+    def _get_daemon_log(self, daemon_name):
         return daemon.DaemonLog(self._get_log_path(daemon_name))
+
+    def status(self, ad_type=htcondor.AdTypes.Any, constraint="true", projection=None):
+        projection = projection or []
+
+        with self.use_config():
+            coll = htcondor.Collector()
+            return coll.query(
+                ad_type=ad_type, constraint=constraint, projection=projection
+            )
+
+    def q(
+        self,
+        constraint="true",
+        projection=None,
+        limit=None,
+        opts=htcondor.QueryOpts.Default,
+    ):
+        if limit is None:
+            limit = -1
+
+        with self.use_config():
+            schedd = htcondor.Schedd()
+            return schedd.query(
+                constraint=constraint, attr_list=projection, limit=limit, opts=opts
+            )
