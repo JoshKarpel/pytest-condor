@@ -77,7 +77,81 @@ def condor(request, test_dir, num_resources_and_uptimes):
         yield condor
 
 
-class TestCustomMachineResourcesInternalBehavior:
+@pytest.fixture(scope="class")
+def handle(test_dir, condor, num_resources_and_uptimes):
+    num_resources, _ = num_resources_and_uptimes
+    handle = condor.submit(
+        description={
+            "executable": "/bin/sleep",
+            "arguments": "3",
+            "request_X": "1",
+            "log": (test_dir / "events.log").as_posix(),
+            "LeaveJobInQueue": "true",
+        },
+        count=num_resources * 2,
+    )
+
+    # we must wait for both the handle and the job queue here,
+    # because we want to use both later
+    handle.wait(timeout=60)
+    condor.job_queue.wait_for_job_completion(handle.job_ids)
+
+    return handle
+
+
+@pytest.fixture(scope="class")
+def num_jobs_running_history(condor, handle):
+    num_running = 0
+    num_running_history = []
+    for jobid, event in condor.job_queue.filter(lambda j, e: j in handle.job_ids):
+        if event == SetJobStatus(JobStatus.RUNNING):
+            num_running += 1
+        elif event == SetJobStatus(JobStatus.COMPLETED):
+            num_running -= 1
+
+        num_running_history.append(num_running)
+
+    return num_running_history
+
+
+@pytest.fixture(scope="class")
+def startd_log_file(condor):
+    with condor.startd_log.path.open(mode="r") as f:
+        yield f
+
+
+@pytest.fixture(scope="class")
+def num_busy_slots_history(startd_log_file, handle, num_resources_and_uptimes):
+    num_resources, _ = num_resources_and_uptimes
+
+    active_claims_history = []
+    active_claims = 0
+
+    for line in startd_log_file:
+        line = line.strip()
+
+        if "Changing activity: Idle -> Busy" in line:
+            active_claims += 1
+        elif "Changing activity: Busy -> Idle" in line:
+            active_claims -= 1
+        active_claims_history.append(active_claims)
+
+        print(
+            "{} {}/{} | {}".format(
+                "*"
+                if len(active_claims_history) > 2
+                and active_claims_history[-1] != active_claims_history[-2]
+                else " ",
+                str(active_claims).rjust(2),
+                num_resources,
+                line,
+            )
+        )
+
+    return active_claims_history
+
+
+class TestCustomMachineResources:
     def test_correct_number_of_resources_assigned(
         self, condor, num_resources_and_uptimes
     ):
@@ -115,76 +189,6 @@ class TestCustomMachineResourcesInternalBehavior:
             for multiplier in range(1000)
         )
 
-
-@pytest.fixture(scope="class")
-def jobids(condor):
-    result = condor.submit(
-        description={"executable": "/bin/sleep", "arguments": "5", "request_X": "1"},
-        count=5,
-    )
-
-    jobids = [JobID(result.cluster(), proc) for proc in range(result.num_procs())]
-
-    condor.job_queue.wait(
-        expected_events={jobid: [SetJobStatus(JobStatus.Completed)] for jobid in jobids}
-    )
-
-    return jobids
-
-
-@pytest.fixture(scope="class")
-def num_jobs_running_history(condor, jobids):
-    num_running = 0
-    num_running_history = []
-    for jobid, event in condor.job_queue.filter(lambda j, e: j in jobids):
-        if event == SetJobStatus(JobStatus.Running):
-            num_running += 1
-        elif event == SetJobStatus(JobStatus.Completed):
-            num_running -= 1
-
-        num_running_history.append(num_running)
-
-    return num_running_history
-
-
-@pytest.fixture(scope="class")
-def startd_log_file(condor):
-    with condor.startd_log.path.open(mode="r") as f:
-        yield f
-
-
-@pytest.fixture(scope="class")
-def num_busy_slots_history(startd_log_file, jobids, num_resources_and_uptimes):
-    num_resources, _ = num_resources_and_uptimes
-
-    active_claims_history = []
-    active_claims = 0
-
-    for line in startd_log_file:
-        line = line.strip()
-
-        if "Changing activity: Idle -> Busy" in line:
-            active_claims += 1
-        elif "Changing activity: Busy -> Idle" in line:
-            active_claims -= 1
-        active_claims_history.append(active_claims)
-
-        print(
-            "{} {}/{} | {}".format(
-                "*"
-                if len(active_claims_history) > 2
-                and active_claims_history[-1] != active_claims_history[-2]
-                else " ",
-                str(active_claims).rjust(2),
-                num_resources,
-                line,
-            )
-        )
-
-    return active_claims_history
-
-
-class TestTestCustomMachineResourcesUserVisibleBehavior:
     def test_never_more_jobs_running_than_num_resources(
         self, num_jobs_running_history, num_resources_and_uptimes
     ):
@@ -208,3 +212,35 @@ class TestTestCustomMachineResourcesUserVisibleBehavior:
     ):
         num_resources, _ = num_resources_and_uptimes
         assert num_resources in num_busy_slots_history
+
+    def test_reported_usage_in_jobads_and_event_log_match(self, handle):
+        terminated_events = handle.event_log.filter(
+            lambda e: e.type is htcondor.JobEventType.JOB_TERMINATED
+        )
+        jobid_to_usage_via_event = {
+            JobID.from_job_event(event): event["XUsage"]
+            for event in sorted(terminated_events, key=lambda e: e.proc)
+        }
+
+        ads = handle.query(
+            projection=["ClusterID", "ProcID", "XUsage", "XAverageUsage"]
+        )
+        jobid_to_usage_via_ad = {
+            JobID.from_job_ad(ad): round(ad["XUsage"], 2)
+            for ad in sorted(ads, key=lambda ad: ad["ProcID"])
+        }
+
+        logger.debug(
+            "Custom resource usage from job event log: {}".format(
+                jobid_to_usage_via_event
+            )
+        )
+        logger.debug("Custom resource from job ads: {}".format(jobid_to_usage_via_ad))
+
+        # make sure we got the right number of ads and terminate events
+        # before doing the real assertion
+        assert (
+            len(jobid_to_usage_via_event) == len(jobid_to_usage_via_ad) == len(handle)
+        )
+
+        assert jobid_to_usage_via_ad == jobid_to_usage_via_event

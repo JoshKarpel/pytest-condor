@@ -220,6 +220,22 @@ class JobQueue:
 
             time.sleep(0.1)
 
+    def wait_for_job_completion(self, job_ids, timeout=60):
+        job_ids = list(job_ids)
+        return self.wait(
+            expected_events={
+                job_id: [SetJobStatus(jobs.JobStatus.COMPLETED)] for job_id in job_ids
+            },
+            unexpected_events={
+                job_id: {
+                    SetJobStatus(jobs.JobStatus.HELD),
+                    SetJobStatus(jobs.JobStatus.SUSPENDED),
+                }
+                for job_id in job_ids
+            },
+            timeout=timeout,
+        )
+
 
 START_TRANSACTION = object()
 END_TRANSACTION = object()

@@ -26,6 +26,14 @@ class JobID:
         self.cluster = int(cluster)
         self.proc = int(proc)
 
+    @classmethod
+    def from_job_event(cls, job_event):
+        return cls(job_event.cluster, job_event.proc)
+
+    @classmethod
+    def from_job_ad(cls, job_ad):
+        return cls(job_ad["ClusterID"], job_ad["ProcID"])
+
     def __eq__(self, other):
         return (
             (isinstance(other, self.__class__) or isinstance(self, other.__class__))
@@ -46,13 +54,20 @@ class JobID:
 
 
 class JobStatus(str, enum.Enum):
-    Idle = "1"
-    Running = "2"
-    Removed = "3"
-    Completed = "4"
-    Held = "5"
-    TransferringOutput = "6"
-    Suspended = "7"
+    """
+    Note that UNMATERIALIZED is not a real job state! It is used as the initial
+    state for jobs in some places, but will never show up in (for example) the
+    job queue log.
+    """
+
+    IDLE = "1"
+    RUNNING = "2"
+    REMOVED = "3"
+    COMPLETED = "4"
+    HELD = "5"
+    TRANSFERRING_OUTPUT = "6"
+    SUSPENDED = "7"
+    UNMATERIALIZED = "100"
 
     def __repr__(self):
         return "{}.{}".format(self.__class__.__name__, self.name)

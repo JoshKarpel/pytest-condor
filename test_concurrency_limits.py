@@ -90,10 +90,10 @@ def jobids_for_sleep_jobs(test_dir, condor, concurrency_limits_and_max_running):
         {
             jobid: [
                 (
-                    SetJobStatus(JobStatus.Running),
+                    SetJobStatus(JobStatus.RUNNING),
                     lambda j, e: condor.run_command(["condor_q"], echo=True),
                 ),
-                SetJobStatus(JobStatus.Completed),
+                SetJobStatus(JobStatus.COMPLETED),
             ]
             for jobid in jobids
         },
@@ -110,9 +110,9 @@ def num_jobs_running_history(condor, jobids_for_sleep_jobs):
     for jobid, event in condor.job_queue.filter(
         lambda j, e: j in jobids_for_sleep_jobs
     ):
-        if event == SetJobStatus(JobStatus.Running):
+        if event == SetJobStatus(JobStatus.RUNNING):
             num_running += 1
-        elif event == SetJobStatus(JobStatus.Completed):
+        elif event == SetJobStatus(JobStatus.COMPLETED):
             num_running -= 1
 
         num_running_history.append(num_running)
@@ -165,9 +165,9 @@ class TestConcurrencyLimits:
             assert in_order(
                 condor.job_queue.by_jobid[jobid],
                 [
-                    SetJobStatus(JobStatus.Idle),
-                    SetJobStatus(JobStatus.Running),
-                    SetJobStatus(JobStatus.Completed),
+                    SetJobStatus(JobStatus.IDLE),
+                    SetJobStatus(JobStatus.RUNNING),
+                    SetJobStatus(JobStatus.COMPLETED),
                 ],
             )
 

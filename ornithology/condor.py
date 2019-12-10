@@ -25,7 +25,7 @@ import re
 
 import htcondor
 
-from . import job_queue, env, cmd, daemon
+from . import job_queue, env, cmd, daemons, handles
 
 
 logger = logging.getLogger(__name__)
@@ -388,23 +388,23 @@ class Condor:
             return cmd.run_command(*args, **kwargs)
 
     @property
-    def master_log(self) -> daemon.DaemonLog:
+    def master_log(self) -> daemons.DaemonLog:
         return self._get_daemon_log("MASTER")
 
     @property
-    def collector_log(self) -> daemon.DaemonLog:
+    def collector_log(self) -> daemons.DaemonLog:
         return self._get_daemon_log("COLLECTOR")
 
     @property
-    def negotiator_log(self) -> daemon.DaemonLog:
+    def negotiator_log(self) -> daemons.DaemonLog:
         return self._get_daemon_log("NEGOTIATOR")
 
     @property
-    def schedd_log(self) -> daemon.DaemonLog:
+    def schedd_log(self) -> daemons.DaemonLog:
         return self._get_daemon_log("SCHEDD")
 
     @property
-    def startd_log(self) -> daemon.DaemonLog:
+    def startd_log(self) -> daemons.DaemonLog:
         return self._get_daemon_log("STARTD")
 
     @property
@@ -431,7 +431,7 @@ class Condor:
         )
 
     def _get_daemon_log(self, daemon_name):
-        return daemon.DaemonLog(self._get_log_path(daemon_name))
+        return daemons.DaemonLog(self._get_log_path(daemon_name))
 
     def get_local_schedd(self):
         with self.use_config():
@@ -481,7 +481,7 @@ class Condor:
 
         return result
 
-    def q(
+    def query(
         self,
         constraint="true",
         projection=None,
@@ -500,6 +500,22 @@ class Condor:
 
         return result
 
+    def act(self, action, constraint="true"):
+        with self.use_config():
+            logger.debug(
+                'Executing action: {} with constraint "{}"'.format(action, constraint)
+            )
+            return self.get_local_schedd().act(action, constraint)
+
+    def edit(self, attr, value, constraint="true"):
+        with self.use_config():
+            logger.debug(
+                'Executing edit: setting {} to {} with constraint "{}"'.format(
+                    attr, value, constraint
+                )
+            )
+            return self.get_local_schedd().edit(constraint, attr, value)
+
     def submit(self, description, count=1, itemdata=None):
         sub = htcondor.Submit(dict(description))
         logger.debug(
@@ -513,7 +529,7 @@ class Condor:
                 result = sub.queue_with_itemdata(txn, count, itemdata)
                 logger.debug("Got submit result:\n{}".format(result))
 
-        return result
+        return handles.ClusterHandle(self, result)
 
 
 RE_PORT_HOST = re.compile(r"\d+\.\d+\.\d+\.\d+:\d+")

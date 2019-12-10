@@ -38,18 +38,18 @@ def job_queue_events_for_sleep_job(default_condor, test_dir):
         {
             jobid: [
                 (  # when the job starts running, hold it
-                    SetJobStatus(JobStatus.Running),
+                    SetJobStatus(JobStatus.RUNNING),
                     lambda jobid, event: default_condor.run_command(
                         ["condor_hold", jobid]
                     ),
                 ),
                 (  # once the job is held, release it
-                    SetJobStatus(JobStatus.Held),
+                    SetJobStatus(JobStatus.HELD),
                     lambda jobid, event: default_condor.run_command(
                         ["condor_release", jobid]
                     ),
                 ),
-                SetJobStatus(JobStatus.Completed),
+                SetJobStatus(JobStatus.COMPLETED),
             ]
         },
         timeout=60,
@@ -63,12 +63,12 @@ class TestCanHoldAndReleaseJob:
         assert in_order(
             job_queue_events_for_sleep_job,
             [
-                SetJobStatus(JobStatus.Idle),
-                SetJobStatus(JobStatus.Running),
-                SetJobStatus(JobStatus.Held),
-                SetJobStatus(JobStatus.Idle),
-                SetJobStatus(JobStatus.Running),
-                SetJobStatus(JobStatus.Completed),
+                SetJobStatus(JobStatus.IDLE),
+                SetJobStatus(JobStatus.RUNNING),
+                SetJobStatus(JobStatus.HELD),
+                SetJobStatus(JobStatus.IDLE),
+                SetJobStatus(JobStatus.RUNNING),
+                SetJobStatus(JobStatus.COMPLETED),
             ],
         )
 

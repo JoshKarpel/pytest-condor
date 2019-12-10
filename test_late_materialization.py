@@ -83,7 +83,7 @@ def jobids_for_sleep_jobs(test_dir, condor, max_idle, max_materialize):
     jobids = [JobID(clusterid, n) for n in range(num_procs)]
 
     condor.job_queue.wait(
-        {jobid: [SetJobStatus(JobStatus.Completed)] for jobid in jobids}, timeout=60
+        {jobid: [SetJobStatus(JobStatus.COMPLETED)] for jobid in jobids}, timeout=60
     )
 
     return jobids
@@ -96,9 +96,9 @@ def num_materialized_jobs_history(condor, jobids_for_sleep_jobs):
     for jobid, event in condor.job_queue.filter(
         lambda j, e: j in jobids_for_sleep_jobs
     ):
-        if event == SetJobStatus(JobStatus.Idle):
+        if event == SetJobStatus(JobStatus.IDLE):
             num_materialized += 1
-        if event == SetJobStatus(JobStatus.Completed):
+        if event == SetJobStatus(JobStatus.COMPLETED):
             num_materialized -= 1
 
         history.append(num_materialized)
@@ -113,9 +113,9 @@ def num_idle_jobs_history(condor, jobids_for_sleep_jobs):
     for jobid, event in condor.job_queue.filter(
         lambda j, e: j in jobids_for_sleep_jobs
     ):
-        if event == SetJobStatus(JobStatus.Idle):
+        if event == SetJobStatus(JobStatus.IDLE):
             num_idle += 1
-        if event == SetJobStatus(JobStatus.Running):
+        if event == SetJobStatus(JobStatus.RUNNING):
             num_idle -= 1
 
         history.append(num_idle)
@@ -129,9 +129,9 @@ class TestLateMaterializationLimits:
             assert in_order(
                 condor.job_queue.by_jobid[jobid],
                 [
-                    SetJobStatus(JobStatus.Idle),
-                    SetJobStatus(JobStatus.Running),
-                    SetJobStatus(JobStatus.Completed),
+                    SetJobStatus(JobStatus.IDLE),
+                    SetJobStatus(JobStatus.RUNNING),
+                    SetJobStatus(JobStatus.COMPLETED),
                 ],
             )
 

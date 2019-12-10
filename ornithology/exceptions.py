@@ -13,31 +13,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from pathlib import Path
-import shutil
 
-import pytest
-
-from ornithology import Condor
+class OrnithologyException(Exception):
+    pass
 
 
-TESTS_DIR = Path.home() / "tests"
-
-
-@pytest.fixture(scope="class")
-def test_dir(request):
-    if request.cls is not None:
-        dir = TESTS_DIR / request.cls.__name__
-    else:
-        dir = TESTS_DIR / request.function.__name__
-
-    if dir.exists():
-        shutil.rmtree(dir)
-
-    return dir
-
-
-@pytest.fixture(scope="class")
-def default_condor(test_dir):
-    with Condor(local_dir=test_dir / "condor") as condor:
-        yield condor
+class NoJobEventLog(OrnithologyException):
+    pass
