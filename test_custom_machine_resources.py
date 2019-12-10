@@ -10,7 +10,7 @@ import pytest
 
 import htcondor
 
-from ornithology import Condor, write_file
+from ornithology import Condor, write_file, JobID, SetJobStatus, JobStatus
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -68,12 +68,6 @@ def num_resources_and_uptimes(request, test_dir):
     return num_resources, uptimes
 
 
-# TODO: obviously won't work in windows...
-@pytest.fixture(scope="class", params=[])
-def resource_uptimes(request, test_dir):
-    return request.param
-
-
 @pytest.fixture(scope="class", params=SLOT_CONFIGS.values(), ids=SLOT_CONFIGS.keys())
 def condor(request, test_dir, num_resources_and_uptimes):
     with Condor(
@@ -83,7 +77,7 @@ def condor(request, test_dir, num_resources_and_uptimes):
         yield condor
 
 
-class TestCustomMachineResources:
+class TestCustomMachineResourcesInternalBehavior:
     def test_correct_number_of_resources_assigned(
         self, condor, num_resources_and_uptimes
     ):
@@ -118,5 +112,99 @@ class TestCustomMachineResources:
         # emitted by the monitor script
         assert any(
             {multiplier * u for u in uptimes} == measured_uptimes
-            for multiplier in range(100)
+            for multiplier in range(1000)
         )
+
+
+@pytest.fixture(scope="class")
+def jobids(condor):
+    result = condor.submit(
+        description={"executable": "/bin/sleep", "arguments": "5", "request_X": "1"},
+        count=5,
+    )
+
+    jobids = [JobID(result.cluster(), proc) for proc in range(result.num_procs())]
+
+    condor.job_queue.wait(
+        expected_events={jobid: [SetJobStatus(JobStatus.Completed)] for jobid in jobids}
+    )
+
+    return jobids
+
+
+@pytest.fixture(scope="class")
+def num_jobs_running_history(condor, jobids):
+    num_running = 0
+    num_running_history = []
+    for jobid, event in condor.job_queue.filter(lambda j, e: j in jobids):
+        if event == SetJobStatus(JobStatus.Running):
+            num_running += 1
+        elif event == SetJobStatus(JobStatus.Completed):
+            num_running -= 1
+
+        num_running_history.append(num_running)
+
+    return num_running_history
+
+
+@pytest.fixture(scope="class")
+def startd_log_file(condor):
+    with condor.startd_log.path.open(mode="r") as f:
+        yield f
+
+
+@pytest.fixture(scope="class")
+def num_busy_slots_history(startd_log_file, jobids, num_resources_and_uptimes):
+    num_resources, _ = num_resources_and_uptimes
+
+    active_claims_history = []
+    active_claims = 0
+
+    for line in startd_log_file:
+        line = line.strip()
+
+        if "Changing activity: Idle -> Busy" in line:
+            active_claims += 1
+        elif "Changing activity: Busy -> Idle" in line:
+            active_claims -= 1
+        active_claims_history.append(active_claims)
+
+        print(
+            "{} {}/{} | {}".format(
+                "*"
+                if len(active_claims_history) > 2
+                and active_claims_history[-1] != active_claims_history[-2]
+                else " ",
+                str(active_claims).rjust(2),
+                num_resources,
+                line,
+            )
+        )
+
+    return active_claims_history
+
+
+class TestTestCustomMachineResourcesUserVisibleBehavior:
+    def test_never_more_jobs_running_than_num_resources(
+        self, num_jobs_running_history, num_resources_and_uptimes
+    ):
+        num_resources, _ = num_resources_and_uptimes
+        assert max(num_jobs_running_history) <= num_resources
+
+    def test_num_jobs_running_hits_num_resources(
+        self, num_jobs_running_history, num_resources_and_uptimes
+    ):
+        num_resources, _ = num_resources_and_uptimes
+        assert num_resources in num_jobs_running_history
+
+    def test_never_more_busy_slots_than_num_resources(
+        self, num_busy_slots_history, num_resources_and_uptimes
+    ):
+        num_resources, _ = num_resources_and_uptimes
+        assert max(num_busy_slots_history) <= num_resources
+
+    def test_num_busy_slots_hits__num_resources(
+        self, num_busy_slots_history, num_resources_and_uptimes
+    ):
+        num_resources, _ = num_resources_and_uptimes
+        assert num_resources in num_busy_slots_history

@@ -13,8 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Mapping, Callable
-
 import logging
 
 import subprocess
@@ -466,10 +464,11 @@ class Condor:
         # TODO: we would like this to use Collector.directQuery, but it can't because of https://htcondor-wiki.cs.wisc.edu/index.cgi/tktview?tn=7420
 
         with self.use_config():
-            target = self.get_local_collector().locate(daemon_type)
+            daemon_location = self.get_local_collector().locate(daemon_type)
 
-            # pretend the target is a collector so we can query it
-            result = htcondor.Collector(target["MyAddress"]).query(
+            # pretend the target daemon is a collector so we can query it
+            daemon = htcondor.Collector(daemon_location["MyAddress"])
+            result = daemon.query(
                 ad_type=ad_type, constraint=constraint, projection=projection
             )
 
@@ -498,6 +497,21 @@ class Condor:
             'Ads returned by queue query with constraint "{}":\n'.format(constraint)
             + "\n".join(str(ad) for ad in result)
         )
+
+        return result
+
+    def submit(self, description, count=1, itemdata=None):
+        sub = htcondor.Submit(dict(description))
+        logger.debug(
+            "Submitting jobs with description:\n{}\nCount: {}\nItemdata: {}".format(
+                sub, count, itemdata
+            )
+        )
+        with self.use_config():
+            schedd = self.get_local_schedd()
+            with schedd.transaction() as txn:
+                result = sub.queue_with_itemdata(txn, count, itemdata)
+                logger.debug("Got submit result:\n{}".format(result))
 
         return result
 
