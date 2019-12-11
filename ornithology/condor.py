@@ -27,7 +27,6 @@ import htcondor
 
 from . import job_queue, env, cmd, daemons, handles
 
-
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
@@ -488,6 +487,9 @@ class Condor:
         limit=-1,
         opts=htcondor.QueryOpts.Default,
     ):
+        if projection is None:
+            projection = []
+
         with self.use_config():
             result = self.get_local_schedd().query(
                 constraint=constraint, attr_list=projection, limit=limit, opts=opts

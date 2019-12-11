@@ -29,13 +29,13 @@ SLOT_CONFIGS = {
     }
 }
 
+RESOURCES_AND_INCREMENTS = [{"X0": 1, "X1": 9, "X2": 4, "X3": 5}]
+
 
 # TODO: obviously won't work on windows...
-@pytest.fixture(scope="class", params=[(4, [1, 9, 4, 5])])
-def num_resources_and_uptimes(request, test_dir):
-    num_resources, uptimes = request.param
-    ids = [str(i) for i in range(num_resources)]
-    names = ["X{}".format(i) for i in ids]
+@pytest.fixture(scope="class", params=RESOURCES_AND_INCREMENTS)
+def resources(request, test_dir):
+    resources = request.param
 
     discovery_script = textwrap.dedent(
         """
@@ -43,7 +43,7 @@ def num_resources_and_uptimes(request, test_dir):
         echo 'DetectedX="{}"'
         exit 0
         """.format(
-            ", ".join(names)
+            ", ".join(resources.keys())
         )
     )
     write_file(test_dir / "discovery", discovery_script)
@@ -55,21 +55,26 @@ def num_resources_and_uptimes(request, test_dir):
             echo 'UptimeXSeconds = {}'
             echo '- XSlot{}'
             """.format(
-                name, uptime, id
+                name, incremenent, name.lstrip("X")
             )
         )
-        for name, uptime, id in zip(names, uptimes, ids)
+        for name, incremenent in resources.items()
     )
     write_file(test_dir / "monitor", monitor_script)
 
     logger.debug("Resource discovery script is:{}".format(discovery_script))
     logger.debug("Resource monitor script is:{}".format(monitor_script))
 
-    return num_resources, uptimes
+    return resources
+
+
+@pytest.fixture(scope="class")
+def num_resources(resources):
+    return len(resources)
 
 
 @pytest.fixture(scope="class", params=SLOT_CONFIGS.values(), ids=SLOT_CONFIGS.keys())
-def condor(request, test_dir, num_resources_and_uptimes):
+def condor(request, test_dir, resources):
     with Condor(
         local_dir=test_dir / "condor",
         config={**request.param, "TEST_DIR": str(test_dir)},
@@ -78,8 +83,7 @@ def condor(request, test_dir, num_resources_and_uptimes):
 
 
 @pytest.fixture(scope="class")
-def handle(test_dir, condor, num_resources_and_uptimes):
-    num_resources, _ = num_resources_and_uptimes
+def handle(test_dir, condor, num_resources):
     handle = condor.submit(
         description={
             "executable": "/bin/sleep",
@@ -87,6 +91,7 @@ def handle(test_dir, condor, num_resources_and_uptimes):
             "request_X": "1",
             "log": (test_dir / "events.log").as_posix(),
             "LeaveJobInQueue": "true",
+            "job_machine_attrs": "AssignedX",
         },
         count=num_resources * 2,
     )
@@ -121,9 +126,7 @@ def startd_log_file(condor):
 
 
 @pytest.fixture(scope="class")
-def num_busy_slots_history(startd_log_file, handle, num_resources_and_uptimes):
-    num_resources, _ = num_resources_and_uptimes
-
+def num_busy_slots_history(startd_log_file, handle, num_resources):
     active_claims_history = []
     active_claims = 0
 
@@ -152,10 +155,7 @@ def num_busy_slots_history(startd_log_file, handle, num_resources_and_uptimes):
 
 
 class TestCustomMachineResources:
-    def test_correct_number_of_resources_assigned(
-        self, condor, num_resources_and_uptimes
-    ):
-        num_resources, uptimes = num_resources_and_uptimes
+    def test_correct_number_of_resources_assigned(self, condor, num_resources):
         result = condor.status(
             ad_type=htcondor.AdTypes.Startd, projection=["SlotID", "AssignedX"]
         )
@@ -163,9 +163,7 @@ class TestCustomMachineResources:
         # if a slot doesn't have a resource, it simply has no entry in its ad
         assert len([ad for ad in result if "AssignedX" in ad]) == num_resources
 
-    def test_correct_uptimes_from_monitor(self, condor, num_resources_and_uptimes):
-        num_resources, uptimes = num_resources_and_uptimes
-
+    def test_correct_uptimes_from_monitor(self, condor, resources):
         direct = condor.direct_status(
             htcondor.DaemonTypes.Startd,
             htcondor.AdTypes.Startd,
@@ -177,54 +175,54 @@ class TestCustomMachineResources:
 
         logger.info(
             "Measured uptimes were {}, expected multiples of {} (not necessarily in order)".format(
-                measured_uptimes, uptimes
+                measured_uptimes, resources.values()
             )
         )
 
-        # the uptimes are accumulating over time, so we
-        # assert that we have some reasonable multiple of the uptimes being
+        # the uptimes are increasing over time, so we
+        # assert that we have some reasonable multiple of the increments being
         # emitted by the monitor script
         assert any(
-            {multiplier * u for u in uptimes} == measured_uptimes
+            {multiplier * u for u in resources.values()} == measured_uptimes
             for multiplier in range(1000)
         )
 
     def test_never_more_jobs_running_than_num_resources(
-        self, num_jobs_running_history, num_resources_and_uptimes
+        self, num_jobs_running_history, num_resources
     ):
-        num_resources, _ = num_resources_and_uptimes
         assert max(num_jobs_running_history) <= num_resources
 
     def test_num_jobs_running_hits_num_resources(
-        self, num_jobs_running_history, num_resources_and_uptimes
+        self, num_jobs_running_history, resources
     ):
-        num_resources, _ = num_resources_and_uptimes
+        num_resources = len(resources)
         assert num_resources in num_jobs_running_history
 
     def test_never_more_busy_slots_than_num_resources(
-        self, num_busy_slots_history, num_resources_and_uptimes
+        self, num_busy_slots_history, num_resources
     ):
-        num_resources, _ = num_resources_and_uptimes
         assert max(num_busy_slots_history) <= num_resources
 
     def test_num_busy_slots_hits__num_resources(
-        self, num_busy_slots_history, num_resources_and_uptimes
+        self, num_busy_slots_history, num_resources
     ):
-        num_resources, _ = num_resources_and_uptimes
         assert num_resources in num_busy_slots_history
 
-    def test_reported_usage_in_jobads_and_event_log_match(self, handle):
+    def test_reported_usage_in_job_ads_and_event_log_match(self, handle):
         terminated_events = handle.event_log.filter(
             lambda e: e.type is htcondor.JobEventType.JOB_TERMINATED
         )
+        ads = handle.query(projection=["ClusterID", "ProcID", "XUsage"])
+
+        # make sure we got the right number of terminate events and ads
+        # before doing the real assertion
+        assert len(terminated_events) == len(ads) == len(handle)
+
         jobid_to_usage_via_event = {
             JobID.from_job_event(event): event["XUsage"]
             for event in sorted(terminated_events, key=lambda e: e.proc)
         }
 
-        ads = handle.query(
-            projection=["ClusterID", "ProcID", "XUsage", "XAverageUsage"]
-        )
         jobid_to_usage_via_ad = {
             JobID.from_job_ad(ad): round(ad["XUsage"], 2)
             for ad in sorted(ads, key=lambda ad: ad["ProcID"])
@@ -235,12 +233,27 @@ class TestCustomMachineResources:
                 jobid_to_usage_via_event
             )
         )
-        logger.debug("Custom resource from job ads: {}".format(jobid_to_usage_via_ad))
-
-        # make sure we got the right number of ads and terminate events
-        # before doing the real assertion
-        assert (
-            len(jobid_to_usage_via_event) == len(jobid_to_usage_via_ad) == len(handle)
+        logger.debug(
+            "Custom resource usage from job ads: {}".format(jobid_to_usage_via_ad)
         )
 
         assert jobid_to_usage_via_ad == jobid_to_usage_via_event
+
+    def test_reported_usage_in_job_ads_makes_sense(self, handle, resources):
+        ads = handle.query(
+            projection=[
+                "ClusterID",
+                "ProcID",
+                "XUsage",
+                "MachineAttrAssignedX0",
+                "RemoteWallClockTime",
+            ]
+        )
+
+        for ad in ads:
+            increment = resources[ad["MachineAttrAssignedX0"]]
+            print("usage         ", ad["XUsage"])
+            print("increment     ", increment)
+            print()
+
+        assert 0
