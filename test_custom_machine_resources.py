@@ -5,6 +5,7 @@
 import logging
 
 import textwrap
+import fractions
 
 import pytest
 
@@ -15,6 +16,9 @@ from ornithology import Condor, write_file, JobID, SetJobStatus, JobStatus
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
+MONITOR_PERIOD = 5
+NUM_PERIODS = 3
+
 # the custom resource is named X
 SLOT_CONFIGS = {
     "static_slots": {
@@ -24,12 +28,12 @@ SLOT_CONFIGS = {
         "STARTD_CRON_X_MONITOR_EXECUTABLE": "$(TEST_DIR)/monitor",
         "STARTD_CRON_JOBLIST": "$(STARTD_CRON_JOBLIST) X_MONITOR",
         "STARTD_CRON_X_MONITOR_MODE": "periodic",
-        "STARTD_CRON_X_MONITOR_PERIOD": "1",
+        "STARTD_CRON_X_MONITOR_PERIOD": str(MONITOR_PERIOD),
         "STARTD_CRON_X_MONITOR_METRICS": "SUM:X",
     }
 }
 
-RESOURCES_AND_INCREMENTS = [{"X0": 1, "X1": 9, "X2": 4, "X3": 5}]
+RESOURCES_AND_INCREMENTS = [{"X0": 5, "X1": 5, "X2": 5, "X3": 5}]
 
 
 # TODO: obviously won't work on windows...
@@ -87,7 +91,7 @@ def handle(test_dir, condor, num_resources):
     handle = condor.submit(
         description={
             "executable": "/bin/sleep",
-            "arguments": "3",
+            "arguments": "17",
             "request_X": "1",
             "log": (test_dir / "events.log").as_posix(),
             "LeaveJobInQueue": "true",
@@ -250,10 +254,72 @@ class TestCustomMachineResources:
             ]
         )
 
+        # here's the deal: XUsage is
+
+        #   (increment amount * number of periods)
+        # -----------------------------------------
+        #     (monitor period * number of periods)
+
+        # BUT in practice, you usually get the monitor period wrong by a second due to rounding
+        # what we observe is that very often, some of increments will be a second longer or shorter
+        # than the increment period. So we could get something like
+
+        #          (increment amount * number of periods)
+        # ---------------------------------------------------------
+        # (monitor period * number of periods) + (number of periods)
+
+        # Also, we could get one more increment than expected
+        # (which only matters if we also got the long periods; otherwise, it just cancels out).
+        # This gives us three kinds of possibilities to check against.
+
+        all_options = []
         for ad in ads:
             increment = resources[ad["MachineAttrAssignedX0"]]
-            print("usage         ", ad["XUsage"])
-            print("increment     ", increment)
+            usage = fractions.Fraction(float(ad["XUsage"])).limit_denominator(30)
+            print(
+                "Job {}.{}, resource {}, increment {}, usage {} ({})".format(
+                    ad["ClusterID"],
+                    ad["ProcID"],
+                    ad["MachineAttrAssignedX0"],
+                    increment,
+                    usage,
+                    float(usage),
+                )
+            )
+
+            exact = [fractions.Fraction(increment, MONITOR_PERIOD)]
+            dither_periods = [
+                fractions.Fraction(
+                    increment * NUM_PERIODS,
+                    ((MONITOR_PERIOD * NUM_PERIODS) + extra_periods),
+                )
+                for extra_periods in range(-NUM_PERIODS, NUM_PERIODS + 1)
+            ]
+            extra_period = [
+                fractions.Fraction(
+                    increment * NUM_PERIODS + 1,
+                    ((MONITOR_PERIOD * (NUM_PERIODS + 1)) + extra_periods),
+                )
+                for extra_periods in range(-(NUM_PERIODS + 1), NUM_PERIODS + 2)
+            ]
+
+            print("*" if usage in exact else " ", "exact".ljust(25), exact)
+            print(
+                "*" if usage in dither_periods else " ",
+                "dither periods".ljust(25),
+                dither_periods,
+            )
+            print(
+                "*" if usage in extra_period else " ",
+                "dither, extra increment".ljust(25),
+                extra_period,
+            )
             print()
 
-        assert 0
+            # build the list of possibilities here, but delay assertions until we've printed all the debug messages
+            all_options.append(exact + dither_periods + extra_period)
+
+        assert all(
+            fractions.Fraction(float(ad["XUsage"])).limit_denominator(30) in options
+            for ad, options in zip(ads, all_options)
+        )
