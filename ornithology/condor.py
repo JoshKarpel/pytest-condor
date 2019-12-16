@@ -407,6 +407,10 @@ class Condor:
         return self._get_daemon_log("STARTD")
 
     @property
+    def shadow_log(self) -> daemons.DaemonLog:
+        return self._get_daemon_log("SHADOW")
+
+    @property
     def job_queue_log(self) -> Path:
         return self._get_log_path("JOB_QUEUE")
 

@@ -20,3 +20,7 @@ class OrnithologyException(Exception):
 
 class NoJobEventLog(OrnithologyException):
     pass
+
+
+class DaemonLogParsingFailed(OrnithologyException):
+    pass
