@@ -250,19 +250,19 @@ class TestCustomMachineResources:
         )
 
         # here's the deal: XUsage is
-
+        #
         #   (increment amount * number of periods)
         # -----------------------------------------
-        #     (monitor period * number of periods)
-
+        #    (monitor period * number of periods)
+        #
         # BUT in practice, you usually get the monitor period wrong by a second due to rounding
         # what we observe is that very often, some of increments will be a second longer or shorter
         # than the increment period. So we could get something like
-
+        #
         #          (increment amount * number of periods)
         # ---------------------------------------------------------
         # (monitor period * number of periods) + (number of periods)
-
+        #
         # Also, we could get one more increment than expected
         # (which only matters if we also got the long periods; otherwise, it just cancels out).
         # This gives us three kinds of possibilities to check against.
@@ -298,16 +298,20 @@ class TestCustomMachineResources:
                 for extra_periods in range(-(NUM_PERIODS + 1), NUM_PERIODS + 2)
             ]
 
-            print("*" if usage in exact else " ", "exact".ljust(25), exact)
+            print(
+                "*" if usage in exact else " ",
+                "exact".ljust(25),
+                ",".join(str(f) for f in exact),
+            )
             print(
                 "*" if usage in dither_periods else " ",
                 "dither periods".ljust(25),
-                dither_periods,
+                ",".join(str(f) for f in dither_periods),
             )
             print(
                 "*" if usage in extra_period else " ",
                 "dither, extra increment".ljust(25),
-                extra_period,
+                ",".join(str(f) for f in extra_period),
             )
             print()
 
