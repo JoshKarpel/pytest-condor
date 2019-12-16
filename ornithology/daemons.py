@@ -17,12 +17,11 @@ from typing import List, Tuple
 
 import logging
 
-
 import re
 import datetime
+import time
 
 from . import exceptions
-
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -48,20 +47,39 @@ class DaemonLogStream:
     def readlines(self):
         for line in self.file:
             line = line.strip()
-            self.messages.append(LogMessage(line))
-            yield line
-
-    def read(self):
-        return "\n".join(self.readlines())
+            if line == "":
+                continue
+            try:
+                msg = LogMessage(line.strip())
+            except exceptions.DaemonLogParsingFailed as e:
+                logger.exception(e)
+            self.messages.append(msg)
+            yield msg
 
     def clear(self):
         """Clear the internal message store; useful for isolating tests."""
         self.messages.clear()
 
+    def display_raw(self):
+        print("\n".join(self.lines))
+
+    def wait(self, condition, timeout=60):
+        start = time.time()
+        while True:
+            if time.time() - start > timeout:
+                return False
+
+            for msg in self.readlines():
+                if condition(msg):
+                    return True
+
+            time.sleep(0.1)
+
 
 RE_MESSAGE = re.compile(
-    r"^(?P<timestamp>\d{2}\/\d{2}\/\d{2}\s\d{2}:\d{2}:\d{2})\s(?P<msg>.*)$"
+    r"^(?P<timestamp>\d{2}\/\d{2}\/\d{2}\s\d{2}:\d{2}:\d{2})\s(?P<tags>(?:\([^()]+\)\s+)*)(?P<msg>.*)$"
 )
+RE_TAGS = re.compile(r"\(([^()]+)\)")
 
 LOG_MESSAGE_TIME_FORMAT = r"%m/%d/%y %H:%M:%S"
 
@@ -72,40 +90,15 @@ class LogMessage:
         match = RE_MESSAGE.match(line)
         if match is None:
             raise exceptions.DaemonLogParsingFailed(
-                "Failed to parse daemon log line: {}".format(line)
+                'Failed to parse daemon log line: "{}"'.format(line)
             )
 
         self.timestamp = datetime.datetime.strptime(
             match.group("timestamp"), LOG_MESSAGE_TIME_FORMAT
         )
 
-        msg = match.group("msg")
-        tags, message = self._parse_msg(msg)
-        self.tags = tags
-        self.message = message
-
-    def _parse_msg(self, msg):
-        tags = []
-        inside = False
-        message = ""
-
-        msg = iter(msg)
-        for char in msg:
-            if char == "(":
-                tag = []
-                inside = True
-            elif char == ")":
-                tags.append("".join(tag))
-                inside = False
-            elif inside:
-                tag.append(char)
-            elif not inside and char == " ":
-                continue
-            else:
-                message = char
-                break
-
-        return tags, message + "".join(msg)
+        self.tags = RE_TAGS.findall(match.group("tags"))
+        self.message = match.group("msg")
 
     def __str__(self):
         return self.line

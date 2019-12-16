@@ -135,17 +135,13 @@ def num_busy_slots_history(
     logger.debug("Checking Startd log file...")
     logger.debug("Expected Job IDs are: {}".format(jobids_for_sleep_jobs))
 
-    startd_log_file.read()
-
     active_claims_history = track_quantity(
-        startd_log_file.lines,
+        startd_log_file.readlines(),
         increment_condition=lambda line: "Changing activity: Idle -> Busy" in line,
         decrement_condition=lambda line: "Changing activity: Busy -> Idle" in line,
         max_quantity=max_running,
         expected_quantity=max_running,
     )
-
-    startd_log_file.clear()
 
     return active_claims_history
 

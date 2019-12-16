@@ -20,12 +20,12 @@ from ornithology import (
 
 class TestJobRouter:
     def test_log(self, default_condor):
-        f = default_condor.master_log.open()
+        f = default_condor.startd_log.open()
 
-        f.read()
+        handle = default_condor.submit({"executable": "/bins/sleep", "arguments": "1"})
 
-        for msg in f.messages:
-            # print(msg)
-            print(repr(msg))
+        f.wait(lambda msg: "-> Busy" in msg.message)
+
+        f.display_raw()
 
         assert 0
