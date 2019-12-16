@@ -25,6 +25,10 @@ import itertools
 
 def in_order(items: Iterable[Any], expected) -> bool:
     """
+    .. attention::
+        This function never asserts on its own! You must assert some condition
+        on its return value.
+
     Given an iterable of items and a list of expected items, return ``True``
     if and only if the items occur in exactly the given order. Extra items may
     appear between expected items, but expected items may not appear out of order.
@@ -78,3 +82,87 @@ def in_order(items: Iterable[Any], expected) -> bool:
 
     logger.error("\n".join(msg_lines))
     return False
+
+
+def track_quantity(
+    iterable,
+    increment_condition,
+    decrement_condition,
+    initial_quantity=0,
+    min_quantity=None,
+    max_quantity=None,
+    expected_quantity=None,
+):
+    """
+    .. attention::
+        This function never asserts on its own! You must assert some condition
+        on its return value.
+
+    Given an iterable of items, track the value of a "quantity" as it changes
+    over the items. The increment and decrement conditions are given as functions.
+    If the increment (decrement) condition returns ``True`` for an item,
+    the quantity is incremented (decremented).
+
+    Both conditions are checked for every item, so an item may cause the quantity
+    to both increment and decrement (in which case it would be reported as staying
+    the same).
+
+    The parameters ``min_quantity``, ``max_quantity``, and ``expected_quantity``
+    do not effect the return value, but they can cause an ERROR-level logging
+    message to be printed when their condition is not satisfied at the end of tracking.
+    The message shows the item-by-item tracking of the quantity.
+
+    Parameters
+    ----------
+    iterable
+    increment_condition
+    decrement_condition
+    min_quantity
+        If given, and the quantity is ever lower than this value, print the debug message.
+    max_quantity
+        If given, and the quantity is ever higher this value, print the debug message.
+    expected_quantity
+        If given, and does not appear in the quantity history, print the debug message.
+
+    Returns
+    -------
+
+    """
+    quantity_history = []
+    quantity_current = initial_quantity
+
+    msg_lines = ["A quantity tracking condition was not satisfied:"]
+
+    for item in iterable:
+        if increment_condition(item):
+            quantity_current += 1
+        if decrement_condition(item):
+            quantity_current -= 1
+
+        quantity_history.append(quantity_current)
+
+        msg_lines.append(
+            "{} {}/{} | {}".format(
+                "*"
+                if len(quantity_history) > 2
+                and quantity_history[-1] != quantity_history[-2]
+                else " ",
+                str(quantity_current).rjust(2),
+                max_quantity or "-",
+                str(item),
+            )
+        )
+
+    if any(
+        (
+            (min_quantity is not None and min(quantity_history) < min_quantity),
+            (max_quantity is not None and max(quantity_history) > max_quantity),
+            (
+                expected_quantity is not None
+                and expected_quantity not in quantity_history
+            ),
+        )
+    ):
+        logger.error("\n".join(msg_lines))
+
+    return quantity_history

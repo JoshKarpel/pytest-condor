@@ -11,7 +11,14 @@ import pytest
 
 import htcondor
 
-from ornithology import Condor, write_file, JobID, SetJobStatus, JobStatus
+from ornithology import (
+    Condor,
+    write_file,
+    JobID,
+    SetJobStatus,
+    JobStatus,
+    track_quantity,
+)
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -109,51 +116,39 @@ def handle(test_dir, condor, num_resources):
 
 
 @pytest.fixture(scope="class")
-def num_jobs_running_history(condor, handle):
-    num_running = 0
-    num_running_history = []
-    for jobid, event in condor.job_queue.filter(lambda j, e: j in handle.job_ids):
-        if event == SetJobStatus(JobStatus.RUNNING):
-            num_running += 1
-        elif event == SetJobStatus(JobStatus.COMPLETED):
-            num_running -= 1
-
-        num_running_history.append(num_running)
-
-    return num_running_history
+def num_jobs_running_history(condor, handle, num_resources):
+    return track_quantity(
+        condor.job_queue.filter(lambda j, e: j in handle.job_ids),
+        increment_condition=lambda id_event: id_event[-1]
+        == SetJobStatus(JobStatus.RUNNING),
+        decrement_condition=lambda id_event: id_event[-1]
+        == SetJobStatus(JobStatus.COMPLETED),
+        max_quantity=num_resources,
+        expected_quantity=num_resources,
+    )
 
 
 @pytest.fixture(scope="class")
 def startd_log_file(condor):
-    with condor.startd_log.path.open(mode="r") as f:
-        yield f
+    return condor.startd_log.open()
 
 
 @pytest.fixture(scope="class")
 def num_busy_slots_history(startd_log_file, handle, num_resources):
-    active_claims_history = []
-    active_claims = 0
+    logger.debug("Checking Startd log file...")
+    logger.debug("Expected Job IDs are:", handle.job_ids)
 
-    for line in startd_log_file:
-        line = line.strip()
+    startd_log_file.read()
 
-        if "Changing activity: Idle -> Busy" in line:
-            active_claims += 1
-        elif "Changing activity: Busy -> Idle" in line:
-            active_claims -= 1
-        active_claims_history.append(active_claims)
+    active_claims_history = track_quantity(
+        startd_log_file.lines,
+        increment_condition=lambda line: "Changing activity: Idle -> Busy" in line,
+        decrement_condition=lambda line: "Changing activity: Busy -> Idle" in line,
+        max_quantity=num_resources,
+        expected_quantity=num_resources,
+    )
 
-        print(
-            "{} {}/{} | {}".format(
-                "*"
-                if len(active_claims_history) > 2
-                and active_claims_history[-1] != active_claims_history[-2]
-                else " ",
-                str(active_claims).rjust(2),
-                num_resources,
-                line,
-            )
-        )
+    startd_log_file.clear()
 
     return active_claims_history
 

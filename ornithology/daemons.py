@@ -30,3 +30,28 @@ logger.setLevel(logging.DEBUG)
 class DaemonLog:
     def __init__(self, path):
         self.path = path
+
+    def open(self):
+        return DaemonLogStream(self.path.open(mode="r", encoding="utf-8"))
+
+
+class DaemonLogStream:
+    def __init__(self, file):
+        self.file = file
+        self.lines = []
+
+    def __iter__(self):
+        yield from self.readlines()
+
+    def readlines(self):
+        for line in self.file:
+            line = line.strip()
+            self.lines.append(line)
+            yield line
+
+    def read(self):
+        return "\n".join(self.readlines())
+
+    def clear(self):
+        """Clear the internal line buffer; useful for isolating tests."""
+        self.lines.clear()
