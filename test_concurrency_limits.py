@@ -64,31 +64,21 @@ def concurrency_limits_and_max_running(request):
 
 
 @pytest.fixture(scope="class")
-def jobids_for_sleep_jobs(test_dir, condor, concurrency_limits_and_max_running):
+def handle(test_dir, condor, concurrency_limits_and_max_running):
     cl, mr = concurrency_limits_and_max_running
 
-    # we need the non-zero sleep to make sure we hit the concurrency limit
-    sub_description = """
-        executable = /bin/sleep
-        arguments = 5
-        
-        request_memory = 1MB
-        request_disk = 1MB
-        
-        concurrency_limits = {concurrency_limits}
-        
-        queue {num_jobs}
-    """.format(
-        concurrency_limits=cl, num_jobs=(mr + 1) * 2
+    handle = condor.submit(
+        description={
+            "executable": "/bin/sleep",
+            "arguments": "5",
+            "request_memory": "100MB",
+            "request_disk": "10MB",
+            "concurrency_limits": cl,
+        },
+        count=mr * 2,
     )
-    submit_file = write_file(test_dir / "submit" / "job.sub", sub_description)
 
-    submit_cmd = condor.run_command(["condor_submit", submit_file])
-    clusterid, num_procs = parse_submit_result(submit_cmd)
-
-    jobids = [JobID(clusterid, n) for n in range(num_procs)]
-
-    condor.job_queue.wait(
+    condor.job_queue.wait_for_events(
         {
             jobid: [
                 (
@@ -97,21 +87,21 @@ def jobids_for_sleep_jobs(test_dir, condor, concurrency_limits_and_max_running):
                 ),
                 SetJobStatus(JobStatus.COMPLETED),
             ]
-            for jobid in jobids
+            for jobid in handle.job_ids
         },
         timeout=60,
     )
 
-    yield jobids
+    yield handle
+
+    handle.remove()
 
 
 @pytest.fixture(scope="class")
-def num_jobs_running_history(
-    condor, jobids_for_sleep_jobs, concurrency_limits_and_max_running
-):
+def num_jobs_running_history(condor, handle, concurrency_limits_and_max_running):
     _, max_running = concurrency_limits_and_max_running
     return track_quantity(
-        condor.job_queue.filter(lambda j, e: j in jobids_for_sleep_jobs),
+        condor.job_queue.filter(lambda j, e: j in handle.job_ids),
         increment_condition=lambda id_event: id_event[-1]
         == SetJobStatus(JobStatus.RUNNING),
         decrement_condition=lambda id_event: id_event[-1]
@@ -127,18 +117,16 @@ def startd_log_file(condor):
 
 
 @pytest.fixture(scope="class")
-def num_busy_slots_history(
-    startd_log_file, jobids_for_sleep_jobs, concurrency_limits_and_max_running
-):
+def num_busy_slots_history(startd_log_file, handle, concurrency_limits_and_max_running):
     _, max_running = concurrency_limits_and_max_running
 
     logger.debug("Checking Startd log file...")
-    logger.debug("Expected Job IDs are: {}".format(jobids_for_sleep_jobs))
+    logger.debug("Expected Job IDs are: {}".format(handle.job_ids))
 
     active_claims_history = track_quantity(
-        startd_log_file.readlines(),
-        increment_condition=lambda line: "Changing activity: Idle -> Busy" in line,
-        decrement_condition=lambda line: "Changing activity: Busy -> Idle" in line,
+        startd_log_file.read(),
+        increment_condition=lambda msg: "Changing activity: Idle -> Busy" in msg,
+        decrement_condition=lambda msg: "Changing activity: Busy -> Idle" in msg,
         max_quantity=max_running,
         expected_quantity=max_running,
     )
@@ -147,8 +135,8 @@ def num_busy_slots_history(
 
 
 class TestConcurrencyLimits:
-    def test_all_jobs_ran(self, condor, jobids_for_sleep_jobs):
-        for jobid in jobids_for_sleep_jobs:
+    def test_all_jobs_ran(self, condor, handle):
+        for jobid in handle.job_ids:
             assert in_order(
                 condor.job_queue.by_jobid[jobid],
                 [

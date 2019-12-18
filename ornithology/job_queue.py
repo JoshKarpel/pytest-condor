@@ -109,7 +109,9 @@ class JobQueue:
                 self.by_jobid[jobid].append(event)
                 acc.append((jobid, event))
 
-    def wait(self, expected_events, unexpected_events=None, timeout: int = 60):
+    def wait_for_events(
+        self, expected_events, unexpected_events=None, timeout: int = 60
+    ):
         """
         Wait for job queue events to occur.
 
@@ -222,7 +224,7 @@ class JobQueue:
 
     def wait_for_job_completion(self, job_ids, timeout=60):
         job_ids = list(job_ids)
-        return self.wait(
+        return self.wait_for_events(
             expected_events={
                 job_id: [SetJobStatus(jobs.JobStatus.COMPLETED)] for job_id in job_ids
             },

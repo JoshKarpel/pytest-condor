@@ -37,7 +37,7 @@ def finished_sleep_jobid(default_condor, submit_sleep_job_cmd):
 
     jobid = JobID(clusterid, 0)
 
-    default_condor.job_queue.wait(
+    default_condor.job_queue.wait_for_events(
         expected_events={jobid: [SetJobStatus(JobStatus.COMPLETED)]},
         unexpected_events={jobid: {SetJobStatus(JobStatus.HELD)}},
     )

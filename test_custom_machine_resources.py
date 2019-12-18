@@ -23,6 +23,8 @@ from ornithology import (
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
+# TODO: these are hard-coded based on the parameters below
+# TODO: should be possible to un-hard-code them...
 MONITOR_PERIOD = 5
 NUM_PERIODS = 3
 
@@ -40,7 +42,7 @@ SLOT_CONFIGS = {
     }
 }
 
-RESOURCES_AND_INCREMENTS = [{"X0": 5, "X1": 5, "X2": 5, "X3": 5}]
+RESOURCES_AND_INCREMENTS = [{"X0": 1, "X1": 4, "X2": 5, "X3": 9}]
 
 
 # TODO: obviously won't work on windows...
@@ -84,11 +86,12 @@ def num_resources(resources):
     return len(resources)
 
 
-@pytest.fixture(scope="class", params=SLOT_CONFIGS.values(), ids=SLOT_CONFIGS.keys())
+@pytest.fixture(scope="class", params=SLOT_CONFIGS.items(), ids=SLOT_CONFIGS.keys())
 def condor(request, test_dir, resources):
+    config_name, config = request.param
     with Condor(
-        local_dir=test_dir / "condor",
-        config={**request.param, "TEST_DIR": str(test_dir)},
+        local_dir=test_dir / "condor-{}".format(request),
+        config={**config, "TEST_DIR": str(test_dir)},
     ) as condor:
         yield condor
 
@@ -112,7 +115,9 @@ def handle(test_dir, condor, num_resources):
     handle.wait(timeout=60)
     condor.job_queue.wait_for_job_completion(handle.job_ids)
 
-    return handle
+    yield handle
+
+    handle.remove()
 
 
 @pytest.fixture(scope="class")
@@ -139,9 +144,9 @@ def num_busy_slots_history(startd_log_file, handle, num_resources):
     logger.debug("Expected Job IDs are:", handle.job_ids)
 
     active_claims_history = track_quantity(
-        startd_log_file.readlines(),
-        increment_condition=lambda line: "Changing activity: Idle -> Busy" in line,
-        decrement_condition=lambda line: "Changing activity: Busy -> Idle" in line,
+        startd_log_file.read(),
+        increment_condition=lambda msg: "Changing activity: Idle -> Busy" in msg,
+        decrement_condition=lambda msg: "Changing activity: Busy -> Idle" in msg,
         max_quantity=num_resources,
         expected_quantity=num_resources,
     )

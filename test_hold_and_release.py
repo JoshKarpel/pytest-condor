@@ -34,7 +34,7 @@ def job_queue_events_for_sleep_job(default_condor, test_dir):
     clusterid, num_procs = parse_submit_result(submit_cmd)
     jobid = JobID(clusterid, 0)
 
-    default_condor.job_queue.wait(
+    default_condor.job_queue.wait_for_events(
         {
             jobid: [
                 (  # when the job starts running, hold it

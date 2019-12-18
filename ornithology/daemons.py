@@ -44,7 +44,7 @@ class DaemonLogStream:
     def lines(self):
         yield from (msg.line for msg in self.messages)
 
-    def readlines(self):
+    def read(self):
         for line in self.file:
             line = line.strip()
             if line == "":
@@ -69,7 +69,7 @@ class DaemonLogStream:
             if time.time() - start > timeout:
                 return False
 
-            for msg in self.readlines():
+            for msg in self.read():
                 if condition(msg):
                     return True
 
@@ -107,3 +107,6 @@ class LogMessage:
         return 'LogMessage(timestamp = {}, tags = {}, message = "{}")'.format(
             self.timestamp, self.tags, self.message
         )
+
+    def __contains__(self, item):
+        return item in self.message
