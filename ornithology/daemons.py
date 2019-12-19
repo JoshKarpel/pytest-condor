@@ -102,6 +102,9 @@ class LogMessage:
         self.tags = RE_TAGS.findall(match.group("tags"))
         self.message = match.group("msg")
 
+    def __iter__(self):
+        return self.timestamp, self.tags, self.message
+
     def __str__(self):
         return self.line
 
