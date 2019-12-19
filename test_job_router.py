@@ -5,7 +5,7 @@ import logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-import pytest
+from conftest import config, standup, action, get_test_dir
 
 from ornithology import (
     write_file,

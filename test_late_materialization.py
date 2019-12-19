@@ -11,6 +11,9 @@ import pytest
 
 import htcondor
 
+
+from conftest import config, standup, action, get_test_dir
+
 from ornithology import (
     Condor,
     write_file,
@@ -23,8 +26,10 @@ from ornithology import (
 )
 
 
-@pytest.fixture(scope="class")
-def condor(test_dir):
+@standup
+def condor(request):
+    test_dir = get_test_dir(request)
+
     with Condor(
         local_dir=test_dir / "condor",
         config={
@@ -37,30 +42,24 @@ def condor(test_dir):
         yield condor
 
 
-_max_idle = [2, 3, 5]
+MAX_IDLE = {"idle=2": 2, "idle=3": 3, "idle=5": 5}
+MAX_MATERIALIZE = {"materialize=2": 2, "materialize=3": 3, "materialize=5": 5}
 
 
-@pytest.fixture(
-    scope="class", params=_max_idle, ids=["max_idle={}".format(p) for p in _max_idle]
-)
+@action(params=MAX_IDLE)
 def max_idle(request):
     return request.param
 
 
-_max_materialize = [2, 3, 5]
-
-
-@pytest.fixture(
-    scope="class",
-    params=_max_materialize,
-    ids=["max_materialize={}".format(p) for p in _max_materialize],
-)
+@action(params=MAX_MATERIALIZE)
 def max_materialize(request):
     return request.param
 
 
-@pytest.fixture(scope="class")
-def jobids_for_sleep_jobs(test_dir, condor, max_idle, max_materialize):
+@action
+def jobids_for_sleep_jobs(request, condor, max_idle, max_materialize):
+    test_dir = get_test_dir(request)
+
     sub_description = """
         executable = /bin/sleep
         arguments = 3
@@ -75,7 +74,7 @@ def jobids_for_sleep_jobs(test_dir, condor, max_idle, max_materialize):
     """.format(
         max_materialize=max_materialize, max_idle=max_idle
     )
-    submit_file = write_file(test_dir / "submit" / "job.sub", sub_description)
+    submit_file = write_file(test_dir / "queue.sub", sub_description)
 
     submit_cmd = condor.run_command(["condor_submit", submit_file])
     clusterid, num_procs = parse_submit_result(submit_cmd)
@@ -89,7 +88,7 @@ def jobids_for_sleep_jobs(test_dir, condor, max_idle, max_materialize):
     return jobids
 
 
-@pytest.fixture(scope="class")
+@action
 def num_materialized_jobs_history(condor, jobids_for_sleep_jobs):
     num_materialized = 0
     history = []
@@ -106,7 +105,7 @@ def num_materialized_jobs_history(condor, jobids_for_sleep_jobs):
     return history
 
 
-@pytest.fixture(scope="class")
+@action
 def num_idle_jobs_history(condor, jobids_for_sleep_jobs):
     num_idle = 0
     history = []
@@ -143,7 +142,7 @@ class TestLateMaterializationLimits:
     def test_hit_max_materialize_limit(
         self, num_materialized_jobs_history, max_materialize
     ):
-        assert max(num_materialized_jobs_history) == max_materialize
+        assert max_materialize in num_materialized_jobs_history
 
     def test_never_more_idle_than_max(
         self, num_idle_jobs_history, max_idle, max_materialize
@@ -151,11 +150,13 @@ class TestLateMaterializationLimits:
         assert max(num_idle_jobs_history) <= min(max_idle, max_materialize)
 
     def test_hit_max_idle_limit(self, num_idle_jobs_history, max_idle, max_materialize):
-        assert max(num_idle_jobs_history) == min(max_idle, max_materialize)
+        assert min(max_idle, max_materialize) in num_idle_jobs_history
 
 
-@pytest.fixture(scope="class")
-def clusterid_for_itemdata(test_dir, condor):
+@action
+def clusterid_for_itemdata(request, condor):
+    test_dir = get_test_dir(request)
+
     # enable late materialization, but with a high enough limit that they all
     # show up immediately (on hold, because we don't need to actually run
     # the jobs to do the tests)
@@ -174,7 +175,7 @@ def clusterid_for_itemdata(test_dir, condor):
 
         queue in (A, B, C, D, E)
     """
-    submit_file = write_file(test_dir / "submit" / "job.sub", sub_description)
+    submit_file = write_file(test_dir / "queue_in.sub", sub_description)
 
     submit_cmd = condor.run_command(["condor_submit", submit_file])
     clusterid, num_procs = parse_submit_result(submit_cmd)

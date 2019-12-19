@@ -20,6 +20,8 @@ from ornithology import (
     track_quantity,
 )
 
+from conftest import config, standup, action, get_test_dir
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
@@ -42,12 +44,19 @@ SLOT_CONFIGS = {
     }
 }
 
-RESOURCES_AND_INCREMENTS = [{"X0": 1, "X1": 4, "X2": 5, "X3": 9}]
+
+@config(params=SLOT_CONFIGS)
+def slot_config(request):
+    return request.param
+
+
+RESOURCES_AND_INCREMENTS = {"X": {"X0": 1, "X1": 4, "X2": 5, "X3": 9}}
 
 
 # TODO: obviously won't work on windows...
-@pytest.fixture(scope="class", params=RESOURCES_AND_INCREMENTS)
-def resources(request, test_dir):
+@config(params=RESOURCES_AND_INCREMENTS)
+def resources(request):
+    test_dir = get_test_dir(request)
     resources = request.param
 
     discovery_script = textwrap.dedent(
@@ -68,10 +77,10 @@ def resources(request, test_dir):
             echo 'UptimeXSeconds = {}'
             echo '- XSlot{}'
             """.format(
-                name, incremenent, name.lstrip("X")
+                name, increment, name.lstrip("X")
             )
         )
-        for name, incremenent in resources.items()
+        for name, increment in resources.items()
     )
     write_file(test_dir / "monitor", monitor_script)
 
@@ -81,23 +90,24 @@ def resources(request, test_dir):
     return resources
 
 
-@pytest.fixture(scope="class")
+@config
 def num_resources(resources):
     return len(resources)
 
 
-@pytest.fixture(scope="class", params=SLOT_CONFIGS.items(), ids=SLOT_CONFIGS.keys())
-def condor(request, test_dir, resources):
-    config_name, config = request.param
+@standup
+def condor(request, slot_config):
+    test_dir = get_test_dir(request)
     with Condor(
-        local_dir=test_dir / "condor-{}".format(request),
-        config={**config, "TEST_DIR": str(test_dir)},
+        local_dir=test_dir / "condor",
+        config={**slot_config, "TEST_DIR": test_dir.as_posix()},
     ) as condor:
         yield condor
 
 
-@pytest.fixture(scope="class")
-def handle(test_dir, condor, num_resources):
+@action
+def handle(request, condor, num_resources):
+    test_dir = get_test_dir(request)
     handle = condor.submit(
         description={
             "executable": "/bin/sleep",
@@ -120,7 +130,7 @@ def handle(test_dir, condor, num_resources):
     handle.remove()
 
 
-@pytest.fixture(scope="class")
+@action
 def num_jobs_running_history(condor, handle, num_resources):
     return track_quantity(
         condor.job_queue.filter(lambda j, e: j in handle.job_ids),
@@ -133,12 +143,12 @@ def num_jobs_running_history(condor, handle, num_resources):
     )
 
 
-@pytest.fixture(scope="class")
+@action
 def startd_log_file(condor):
     return condor.startd_log.open()
 
 
-@pytest.fixture(scope="class")
+@action
 def num_busy_slots_history(startd_log_file, handle, num_resources):
     logger.debug("Checking Startd log file...")
     logger.debug("Expected Job IDs are:", handle.job_ids)

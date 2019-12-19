@@ -7,6 +7,9 @@ logger.setLevel(logging.DEBUG)
 
 import pytest
 
+from conftest import config, standup, action, get_test_dir
+
+
 from ornithology import (
     write_file,
     parse_submit_result,
@@ -18,8 +21,10 @@ from ornithology import (
 )
 
 
-@pytest.fixture(scope="class")
-def submit_sleep_job_cmd(default_condor, test_dir):
+@action
+def submit_sleep_job_cmd(request, default_condor):
+    test_dir = get_test_dir(request)
+
     sub_description = """
         executable = /bin/sleep
         arguments = 0

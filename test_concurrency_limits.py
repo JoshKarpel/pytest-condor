@@ -9,16 +9,9 @@ logger.setLevel(logging.DEBUG)
 
 import pytest
 
-from ornithology import (
-    Condor,
-    write_file,
-    parse_submit_result,
-    JobID,
-    SetJobStatus,
-    JobStatus,
-    in_order,
-    track_quantity,
-)
+from ornithology import Condor, SetJobStatus, JobStatus, in_order, track_quantity
+
+from conftest import config, standup, action, get_test_dir
 
 # the effective number of slots should always be much larger than the number of
 # jobs you plan to submit
@@ -33,49 +26,77 @@ SLOT_CONFIGS = {
 }
 
 
-@pytest.fixture(scope="class", params=SLOT_CONFIGS.items(), ids=SLOT_CONFIGS.keys())
-def condor(request, test_dir):
-    config_name, config = request.param
+@config(params=SLOT_CONFIGS)
+def slot_config(request):
+    return request.param
+
+
+CONCURRENCY_LIMITS = {
+    "named_limit": {
+        "config-key": "XSW_LIMIT",
+        "config-value": "4",
+        "submit-value": "XSW",
+        "max-running": 4,
+    },
+    "default_limit": {
+        "config-key": "CONCURRENCY_LIMIT_DEFAULT",
+        "config-value": "2",
+        "submit-value": "UNDEFINED:2",
+        "max-running": 1,
+    },
+    "default_small": {
+        "config-key": "CONCURRENCY_LIMIT_DEFAULT_SMALL",
+        "config-value": "3",
+        "submit-value": "small.license",
+        "max-running": 3,
+    },
+    "default_large": {
+        "config-key": "CONCURRENCY_LIMIT_DEFAULT_LARGE",
+        "config-value": "1",
+        "submit-value": "large.license",
+        "max-running": 1,
+    },
+}
+
+
+@standup
+def condor(request, slot_config):
+    test_dir = get_test_dir(request)
+
+    # set all of the concurrency limits for each slot config,
+    # so that we can run all the actual job submits against the same config
+    concurrency_limit_config = {
+        v["config-key"]: v["config-value"] for v in CONCURRENCY_LIMITS.values()
+    }
+
     with Condor(
-        local_dir=test_dir / "condor-{}".format(config_name),
+        local_dir=test_dir / "condor",
         config={
-            **config,
+            **slot_config,
+            **concurrency_limit_config,
             # make the sure the negotiator runs many times within a single job duration
             "NEGOTIATOR_INTERVAL": "1",
-            # below are the concurrency limits we'll test against
-            # if you change these, change the below fixture as well
-            "XSW_LIMIT": "4",
-            "CONCURRENCY_LIMIT_DEFAULT": "2",
-            "CONCURRENCY_LIMIT_DEFAULT_SMALL": "3",
-            "CONCURRENCY_LIMIT_DEFAULT_LARGE": "1",
         },
     ) as condor:
         yield condor
 
 
-@pytest.fixture(
-    scope="class",
-    # these should match the limits expressed in the config
-    params=[("XSW", 4), ("UNDEFINED:2", 1), ("small.license", 3), ("large.license", 1)],
-    ids=["named_limit", "default_limit", "default_small", "default_large"],
-)
-def concurrency_limits_and_max_running(request):
+@action(params=CONCURRENCY_LIMITS)
+def concurrency_limit(request):
     return request.param
 
 
-@pytest.fixture(scope="class")
-def handle(test_dir, condor, concurrency_limits_and_max_running):
-    cl, mr = concurrency_limits_and_max_running
-
+@action
+def handle(condor, concurrency_limit):
     handle = condor.submit(
         description={
             "executable": "/bin/sleep",
             "arguments": "5",
             "request_memory": "100MB",
             "request_disk": "10MB",
-            "concurrency_limits": cl,
+            "concurrency_limits": concurrency_limit["submit-value"],
         },
-        count=mr * 2,
+        count=(concurrency_limit["max-running"] + 1) * 2,
     )
 
     condor.job_queue.wait_for_events(
@@ -97,29 +118,26 @@ def handle(test_dir, condor, concurrency_limits_and_max_running):
     handle.remove()
 
 
-@pytest.fixture(scope="class")
-def num_jobs_running_history(condor, handle, concurrency_limits_and_max_running):
-    _, max_running = concurrency_limits_and_max_running
+@action
+def num_jobs_running_history(condor, handle, concurrency_limit):
     return track_quantity(
         condor.job_queue.filter(lambda j, e: j in handle.job_ids),
         increment_condition=lambda id_event: id_event[-1]
         == SetJobStatus(JobStatus.RUNNING),
         decrement_condition=lambda id_event: id_event[-1]
         == SetJobStatus(JobStatus.COMPLETED),
-        max_quantity=max_running,
-        expected_quantity=max_running,
+        max_quantity=concurrency_limit["max-running"],
+        expected_quantity=concurrency_limit["max-running"],
     )
 
 
-@pytest.fixture(scope="class")
+@action
 def startd_log_file(condor):
     return condor.startd_log.open()
 
 
-@pytest.fixture(scope="class")
-def num_busy_slots_history(startd_log_file, handle, concurrency_limits_and_max_running):
-    _, max_running = concurrency_limits_and_max_running
-
+@action
+def num_busy_slots_history(startd_log_file, handle, concurrency_limit):
     logger.debug("Checking Startd log file...")
     logger.debug("Expected Job IDs are: {}".format(handle.job_ids))
 
@@ -127,8 +145,8 @@ def num_busy_slots_history(startd_log_file, handle, concurrency_limits_and_max_r
         startd_log_file.read(),
         increment_condition=lambda msg: "Changing activity: Idle -> Busy" in msg,
         decrement_condition=lambda msg: "Changing activity: Busy -> Idle" in msg,
-        max_quantity=max_running,
-        expected_quantity=max_running,
+        max_quantity=concurrency_limit["max-running"],
+        expected_quantity=concurrency_limit["max-running"],
     )
 
     return active_claims_history
@@ -147,25 +165,19 @@ class TestConcurrencyLimits:
             )
 
     def test_never_more_jobs_running_than_limit(
-        self, num_jobs_running_history, concurrency_limits_and_max_running
+        self, num_jobs_running_history, concurrency_limit
     ):
-        _, max_running = concurrency_limits_and_max_running
-        assert max(num_jobs_running_history) <= max_running
+        assert max(num_jobs_running_history) <= concurrency_limit["max-running"]
 
     def test_num_jobs_running_hits_limit(
-        self, num_jobs_running_history, concurrency_limits_and_max_running
+        self, num_jobs_running_history, concurrency_limit
     ):
-        _, max_running = concurrency_limits_and_max_running
-        assert max_running in num_jobs_running_history
+        assert concurrency_limit["max-running"] in num_jobs_running_history
 
     def test_never_more_busy_slots_than_limit(
-        self, num_busy_slots_history, concurrency_limits_and_max_running
+        self, num_busy_slots_history, concurrency_limit
     ):
-        _, max_running = concurrency_limits_and_max_running
-        assert max(num_busy_slots_history) <= max_running
+        assert max(num_busy_slots_history) <= concurrency_limit["max-running"]
 
-    def test_num_busy_slots_hits_limit(
-        self, num_busy_slots_history, concurrency_limits_and_max_running
-    ):
-        _, max_running = concurrency_limits_and_max_running
-        assert max_running in num_busy_slots_history
+    def test_num_busy_slots_hits_limit(self, num_busy_slots_history, concurrency_limit):
+        assert concurrency_limit["max-running"] in num_busy_slots_history

@@ -13,43 +13,71 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
+
 from pathlib import Path
 import shutil
 import re
+import collections
 
 import pytest
 
 from ornithology import Condor
 
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
 TESTS_DIR = Path.home() / "tests"
 
-RE_ID = re.compile(r"\[(.*)\]$")
+RE_ID = re.compile(r"\[([^()]*)\]$")
+
+ALREADY_SEEN = set()
+CONFIG_IDS = collections.defaultdict(set)
 
 
 def get_test_dir(request):
     dir = TESTS_DIR / request.module.__name__
 
     id = RE_ID.search(request._pyfuncitem.name)
+
     if id is not None:
-        dir /= id.group(1)
+        config_ids = CONFIG_IDS[request.module.__name__]
+        ids = [id for id in id.group(1).split("-") if id in config_ids]
+        logger.debug("ids {}".format(ids))
+        if len(ids) > 0:
+            dir /= "-".join(ids)
+
+    if dir not in ALREADY_SEEN and dir.exists():
+        shutil.rmtree(dir)
+
+    ALREADY_SEEN.add(dir)
+    dir.mkdir(parents=True, exist_ok=True)
+
+    logger.debug("dir is {}".format(dir))
 
     return dir
 
 
-@pytest.fixture(scope="module")
-def test_dir():
-    pass
+def _check_params(params):
+    if params is None:
+        return True
+
+    for key in params.keys():
+        if "-" in key:
+            raise ValueError('config param keys must not include "-"')
 
 
-def pytest_fixture_setup(fixturedef, request):
-    if fixturedef.argname == "test_dir":
-        d = get_test_dir(request)
-        fixturedef.cached_result = (d, None, None)
-        return d
+def _add_config_ids(func, params):
+    if params is None:
+        return
+
+    CONFIG_IDS[func.__module__] |= params.keys()
 
 
 def config(*args, params=None):
     def decorator(func):
+        _check_params(params)
+        _add_config_ids(func, params)
         return pytest.fixture(
             scope="module",
             autouse=True,
@@ -63,9 +91,9 @@ def config(*args, params=None):
     return decorator
 
 
-def standup(*args, **kwargs):
+def standup(*args):
     def decorator(func):
-        return pytest.fixture(scope="module", **kwargs)(func)
+        return pytest.fixture(scope="module")(func)
 
     if len(args) == 1:
         return decorator(args[0])
@@ -73,11 +101,24 @@ def standup(*args, **kwargs):
     return decorator
 
 
-def action(*args, **kwargs):
+def action(*args, params=None):
+    _check_params(params)
+
     def decorator(func):
-        return pytest.fixture(scope="class", **kwargs)(func)
+        return pytest.fixture(
+            scope="class",
+            params=params.values() if params is not None else None,
+            ids=params.keys() if params is not None else None,
+        )(func)
 
     if len(args) == 1:
         return decorator(args[0])
 
     return decorator
+
+
+@standup
+def default_condor(request):
+    test_dir = get_test_dir(request)
+    with Condor(local_dir=test_dir / "condor") as condor:
+        yield condor

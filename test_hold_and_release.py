@@ -7,7 +7,7 @@ import logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-import pytest
+from conftest import config, standup, action, get_test_dir
 
 from ornithology import (
     write_file,
@@ -20,15 +20,16 @@ from ornithology import (
 )
 
 
-@pytest.fixture(scope="class")
-def job_queue_events_for_sleep_job(default_condor, test_dir):
+@action
+def job_queue_events_for_sleep_job(request, default_condor):
+    test_dir = get_test_dir(request)
     sub_description = """
         executable = /bin/sleep
         arguments = 10
         
         queue
     """
-    submit_file = write_file(test_dir / "submit" / "job.sub", sub_description)
+    submit_file = write_file(test_dir / "job.sub", sub_description)
 
     submit_cmd = default_condor.run_command(["condor_submit", submit_file])
     clusterid, num_procs = parse_submit_result(submit_cmd)
