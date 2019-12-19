@@ -7,8 +7,6 @@ import logging
 import textwrap
 import fractions
 
-import pytest
-
 import htcondor
 
 from ornithology import (
@@ -122,7 +120,7 @@ def handle(request, condor, num_resources):
 
     # we must wait for both the handle and the job queue here,
     # because we want to use both later
-    handle.wait(timeout=60)
+    handle.wait(timeout=60, verbose=True)
     condor.job_queue.wait_for_job_completion(handle.job_ids)
 
     yield handle

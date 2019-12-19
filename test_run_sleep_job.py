@@ -5,8 +5,6 @@ import logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-import pytest
-
 from conftest import config, standup, action, get_test_dir
 
 
@@ -36,7 +34,7 @@ def submit_sleep_job_cmd(request, default_condor):
     return default_condor.run_command(["condor_submit", submit_file])
 
 
-@pytest.fixture(scope="class")
+@action
 def finished_sleep_jobid(default_condor, submit_sleep_job_cmd):
     clusterid, num_procs = parse_submit_result(submit_sleep_job_cmd)
 
@@ -50,7 +48,7 @@ def finished_sleep_jobid(default_condor, submit_sleep_job_cmd):
     return jobid
 
 
-@pytest.fixture(scope="class")
+@action
 def job_queue_events_for_sleep_job(default_condor, finished_sleep_jobid):
     return default_condor.job_queue.by_jobid[finished_sleep_jobid]
 

@@ -277,7 +277,7 @@ class ClusterHandle(ConstraintHandle):
 
         return self._state
 
-    def wait(self, condition=None, timeout=60) -> float:
+    def wait(self, condition=None, timeout=60, verbose=False) -> float:
         if condition is None:
             condition = lambda hnd: hnd.state.all_complete()
 
@@ -289,6 +289,8 @@ class ClusterHandle(ConstraintHandle):
                     "Wait for handle {} did not complete successfully".format(self)
                 )
                 return False
+            if verbose:
+                logger.debug("Handle {} state: {}", self, self.state.counts())
             time.sleep(1)
             self.state.read_events()
 
@@ -372,8 +374,11 @@ class ClusterState:
 
     def read_events(self):
         # TODO: this reacharound through the handle is bad
-        new_events = list(self._handle.event_log.read_events())
+        # trigger a read...
+        list(self._handle.event_log.read_events())
 
+        # ... but actually look through everything we haven't read yet
+        # in case someone else has read elsewhere
         for event in self._handle.event_log.events[self._last_event_read + 1 :]:
             self._last_event_read += 1
 

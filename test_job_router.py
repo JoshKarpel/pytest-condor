@@ -5,6 +5,8 @@ import logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
+from pprint import pprint
+
 from conftest import config, standup, action, get_test_dir
 
 from ornithology import (
@@ -26,6 +28,10 @@ class TestJobRouter:
 
         f.wait(lambda msg: "-> Busy" in msg.message)
 
-        f.display_raw()
+        for transaction in default_condor.job_queue.read_transactions():
+            # print(transaction)
+            # print(len(transaction))
+            pprint(transaction.as_dict())
+            print()
 
         assert 0

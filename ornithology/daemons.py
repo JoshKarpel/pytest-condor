@@ -13,8 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import List, Tuple
-
 import logging
 
 import re
@@ -39,6 +37,7 @@ class DaemonLogStream:
     def __init__(self, file):
         self.file = file
         self.messages = []
+        self.line_number = 0
 
     @property
     def lines(self):
@@ -50,9 +49,10 @@ class DaemonLogStream:
             if line == "":
                 continue
             try:
-                msg = LogMessage(line.strip())
+                msg = LogMessage(line.strip(), self.file.name, self.line_number)
             except exceptions.DaemonLogParsingFailed as e:
-                logger.exception(e)
+                logger.warning(e)
+            self.line_number += 1
             self.messages.append(msg)
             yield msg
 
@@ -85,12 +85,14 @@ LOG_MESSAGE_TIME_FORMAT = r"%m/%d/%y %H:%M:%S"
 
 
 class LogMessage:
-    def __init__(self, line):
+    def __init__(self, line, file_name, line_number):
         self.line = line
         match = RE_MESSAGE.match(line)
         if match is None:
             raise exceptions.DaemonLogParsingFailed(
-                'Failed to parse daemon log line: "{}"'.format(line)
+                "Failed to parse daemon log line {}:{} -> {}".format(
+                    file_name, line_number, repr(line)
+                )
             )
 
         self.timestamp = datetime.datetime.strptime(

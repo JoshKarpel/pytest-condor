@@ -7,8 +7,6 @@ import logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-import pytest
-
 from ornithology import Condor, SetJobStatus, JobStatus, in_order, track_quantity
 
 from conftest import config, standup, action, get_test_dir

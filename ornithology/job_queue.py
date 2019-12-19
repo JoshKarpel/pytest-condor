@@ -82,18 +82,22 @@ class JobQueue:
     def __init__(self, condor: "condor.Condor"):
         self.condor = condor
 
-        self.events = []
+        self.transactions = []
         self.by_jobid = collections.defaultdict(list)
 
         self._job_queue_log_file = None
 
     def __iter__(self):
-        yield from self.events
+        yield from self.transactions
+
+    def events(self):
+        for transaction in self.transactions:
+            yield from transaction
 
     def filter(self, condition):
-        yield from ((j, e) for j, e in self if condition(j, e))
+        yield from ((j, e) for j, e in self.events() if condition(j, e))
 
-    def read_events(self) -> Iterator[List[Tuple[jobs.JobID, SetAttribute]]]:
+    def read_transactions(self) -> Iterator[List[Tuple[jobs.JobID, SetAttribute]]]:
         """Yield transactions (i.e., lists) of (jobid, event) pairs from the job queue log."""
         if self._job_queue_log_file is None:
             self._job_queue_log_file = self.condor.job_queue_log.open(mode="r")
@@ -103,9 +107,10 @@ class JobQueue:
             if event is START_TRANSACTION:
                 acc = []
             elif event is END_TRANSACTION:
-                yield acc
+                t = JobQueueTransaction(acc)
+                self.transactions.append(t)
+                yield t
             elif isinstance(jobid, jobs.JobID) and isinstance(event, SetAttribute):
-                self.events.append((jobid, event))
                 self.by_jobid[jobid].append(event)
                 acc.append((jobid, event))
 
@@ -166,7 +171,7 @@ class JobQueue:
                 logger.error("Job queue event wait ending due to timeout!")
                 return False
 
-            for transaction in self.read_events():
+            for transaction in self.read_transactions():
                 for jobid, event in transaction:
                     if jobid not in jobids:
                         continue
@@ -257,3 +262,32 @@ def parse_job_queue_log_line(
         return None, END_TRANSACTION
 
     return None, None
+
+
+class JobQueueTransaction:
+    def __init__(self, events):
+        self.events = events
+
+    def __iter__(self):
+        yield from self.events
+
+    def __len__(self):
+        return len(self.events)
+
+    def __getitem__(self, item):
+        return self.events[item]
+
+    def __contains__(self, item):
+        expected_j, expected_e = item
+        return any(expected_j == j and expected_e.matches(e) for j, e in self)
+
+    def as_dict(self):
+        d = collections.defaultdict(dict)
+
+        for j, e in self:
+            d[j][e.attribute] = e.value
+
+        return dict(d)
+
+    def __repr__(self):
+        return "{}{}".format(self.__class__.__name__, repr(self.events))
