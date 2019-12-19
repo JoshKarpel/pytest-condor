@@ -48,9 +48,14 @@ def pytest_fixture_setup(fixturedef, request):
         return d
 
 
-def config(*args, **kwargs):
+def config(*args, params=None):
     def decorator(func):
-        return pytest.fixture(scope="module", autouse=True, **kwargs)(func)
+        return pytest.fixture(
+            scope="module",
+            autouse=True,
+            params=params.values() if params is not None else None,
+            ids=params.keys() if params is not None else None,
+        )(func)
 
     if len(args) == 1:
         return decorator(args[0])
