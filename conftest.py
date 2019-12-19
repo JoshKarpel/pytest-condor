@@ -15,29 +15,64 @@
 
 from pathlib import Path
 import shutil
+import re
 
 import pytest
 
 from ornithology import Condor
 
-
 TESTS_DIR = Path.home() / "tests"
 
+RE_ID = re.compile(r"\[(.*)\]$")
 
-@pytest.fixture(scope="class")
-def test_dir(request):
-    if request.cls is not None:
-        dir = TESTS_DIR / request.cls.__name__
-    else:
-        dir = TESTS_DIR / request.function.__name__
 
-    if dir.exists():
-        shutil.rmtree(dir)
+def get_test_dir(request):
+    dir = TESTS_DIR / request.module.__name__
+
+    id = RE_ID.search(request._pyfuncitem.name)
+    if id is not None:
+        dir /= id.group(1)
 
     return dir
 
 
-@pytest.fixture(scope="class")
-def default_condor(test_dir):
-    with Condor(local_dir=test_dir / "condor") as condor:
-        yield condor
+@pytest.fixture(scope="module")
+def test_dir():
+    pass
+
+
+def pytest_fixture_setup(fixturedef, request):
+    if fixturedef.argname == "test_dir":
+        d = get_test_dir(request)
+        fixturedef.cached_result = (d, None, None)
+        return d
+
+
+def config(*args, **kwargs):
+    def decorator(func):
+        return pytest.fixture(scope="module", autouse=True, **kwargs)(func)
+
+    if len(args) == 1:
+        return decorator(args[0])
+
+    return decorator
+
+
+def standup(*args, **kwargs):
+    def decorator(func):
+        return pytest.fixture(scope="module", **kwargs)(func)
+
+    if len(args) == 1:
+        return decorator(args[0])
+
+    return decorator
+
+
+def action(*args, **kwargs):
+    def decorator(func):
+        return pytest.fixture(scope="class", **kwargs)(func)
+
+    if len(args) == 1:
+        return decorator(args[0])
+
+    return decorator
