@@ -10,7 +10,7 @@ logger.setLevel(logging.DEBUG)
 import htcondor
 
 
-from conftest import config, standup, action, get_test_dir
+from conftest import config, standup, action
 
 from ornithology import (
     Condor,
@@ -25,9 +25,7 @@ from ornithology import (
 
 
 @standup
-def condor(request):
-    test_dir = get_test_dir(request)
-
+def condor(test_dir):
     with Condor(
         local_dir=test_dir / "condor",
         config={
@@ -55,9 +53,7 @@ def max_materialize(request):
 
 
 @action
-def jobids_for_sleep_jobs(request, condor, max_idle, max_materialize):
-    test_dir = get_test_dir(request)
-
+def jobids_for_sleep_jobs(test_dir, condor, max_idle, max_materialize):
     sub_description = """
         executable = /bin/sleep
         arguments = 3
@@ -152,9 +148,7 @@ class TestLateMaterializationLimits:
 
 
 @action
-def clusterid_for_itemdata(request, condor):
-    test_dir = get_test_dir(request)
-
+def clusterid_for_itemdata(test_dir, condor):
     # enable late materialization, but with a high enough limit that they all
     # show up immediately (on hold, because we don't need to actually run
     # the jobs to do the tests)

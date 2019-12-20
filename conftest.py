@@ -19,6 +19,7 @@ from pathlib import Path
 import shutil
 import re
 import collections
+import copy
 
 import pytest
 
@@ -35,27 +36,107 @@ ALREADY_SEEN = set()
 CONFIG_IDS = collections.defaultdict(set)
 
 
-def get_test_dir(request):
-    dir = TESTS_DIR / request.module.__name__
+class TestDir:
+    def __init__(self):
+        self._path = None
 
-    id = RE_ID.search(request._pyfuncitem.name)
+    def _recompute(self, funcitem):
+        dir = TESTS_DIR / funcitem.module.__name__
 
-    if id is not None:
-        config_ids = CONFIG_IDS[request.module.__name__]
-        ids = [id for id in id.group(1).split("-") if id in config_ids]
-        logger.debug("ids {}".format(ids))
-        if len(ids) > 0:
-            dir /= "-".join(ids)
+        id = RE_ID.search(funcitem.nodeid)
 
-    if dir not in ALREADY_SEEN and dir.exists():
-        shutil.rmtree(dir)
+        if id is not None:
+            config_ids = CONFIG_IDS[funcitem.module.__name__]
+            ids = [id for id in id.group(1).split("-") if id in config_ids]
+            if len(ids) > 0:
+                dir /= "-".join(ids)
 
-    ALREADY_SEEN.add(dir)
-    dir.mkdir(parents=True, exist_ok=True)
+        if dir not in ALREADY_SEEN and dir.exists():
+            shutil.rmtree(dir)
 
-    logger.debug("dir is {}".format(dir))
+        ALREADY_SEEN.add(dir)
+        dir.mkdir(parents=True, exist_ok=True)
 
-    return dir
+        self._path = dir
+
+    @property
+    def __dict__(self):
+        return self._path.__dict__
+
+    def __repr__(self):
+        return repr(self._path)
+
+    def __bool__(self):
+        try:
+            return bool(self._path)
+        except RuntimeError:
+            return False
+
+    def __dir__(self):
+        return dir(self._path)
+
+    def __getattr__(self, name):
+        return getattr(self._path, name)
+
+    __str__ = lambda x: str(x._path)
+    __lt__ = lambda x, o: x._path < o
+    __le__ = lambda x, o: x._path <= o
+    __eq__ = lambda x, o: x._path == o
+    __ne__ = lambda x, o: x._path != o
+    __gt__ = lambda x, o: x._path > o
+    __ge__ = lambda x, o: x._path >= o
+    __hash__ = lambda x: hash(x._path)
+    __len__ = lambda x: len(x._path)
+    __getitem__ = lambda x, i: x._path[i]
+    __iter__ = lambda x: iter(x._path)
+    __contains__ = lambda x, i: i in x._path
+    __add__ = lambda x, o: x._path + o
+    __sub__ = lambda x, o: x._path - o
+    __mul__ = lambda x, o: x._path * o
+    __floordiv__ = lambda x, o: x._path // o
+    __mod__ = lambda x, o: x._path % o
+    __divmod__ = lambda x, o: x._path.__divmod__(o)
+    __pow__ = lambda x, o: x._path ** o
+    __lshift__ = lambda x, o: x._path << o
+    __rshift__ = lambda x, o: x._path >> o
+    __and__ = lambda x, o: x._path & o
+    __xor__ = lambda x, o: x._path ^ o
+    __or__ = lambda x, o: x._path | o
+    __truediv__ = lambda x, o: x._path.__truediv__(o)
+    __neg__ = lambda x: -(x._path)
+    __pos__ = lambda x: +(x._path)
+    __abs__ = lambda x: abs(x._path)
+    __invert__ = lambda x: ~(x._path)
+    __complex__ = lambda x: complex(x._path)
+    __int__ = lambda x: int(x._path)
+    __float__ = lambda x: float(x._path)
+    __oct__ = lambda x: oct(x._path)
+    __hex__ = lambda x: hex(x._path)
+    __index__ = lambda x: x._path.__index__()
+    __coerce__ = lambda x, o: x._path.__coerce__(x, o)
+    __enter__ = lambda x: x._path.__enter__()
+    __exit__ = lambda x, *a, **kw: x._path.__exit__(*a, **kw)
+    __radd__ = lambda x, o: o + x._path
+    __rsub__ = lambda x, o: o - x._path
+    __rmul__ = lambda x, o: o * x._path
+    __rdiv__ = lambda x, o: o / x._path
+    __rtruediv__ = __rdiv__
+    __rfloordiv__ = lambda x, o: o // x._path
+    __rmod__ = lambda x, o: o % x._path
+    __rdivmod__ = lambda x, o: x._path.__rdivmod__(o)
+    __copy__ = lambda x: copy.copy(x._path)
+
+
+TEST_DIR = TestDir()
+
+
+@pytest.fixture(scope="module")
+def test_dir():
+    return TEST_DIR
+
+
+def pytest_runtest_protocol(item, nextitem):
+    TEST_DIR._recompute(item)
 
 
 def _check_params(params):
@@ -118,7 +199,6 @@ def action(*args, params=None):
 
 
 @standup
-def default_condor(request):
-    test_dir = get_test_dir(request)
+def default_condor(test_dir):
     with Condor(local_dir=test_dir / "condor") as condor:
         yield condor

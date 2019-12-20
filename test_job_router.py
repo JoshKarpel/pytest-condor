@@ -7,7 +7,7 @@ logger.setLevel(logging.DEBUG)
 
 from pprint import pprint
 
-from conftest import config, standup, action, get_test_dir
+from conftest import config, standup, action
 
 from ornithology import (
     write_file,

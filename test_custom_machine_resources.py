@@ -18,7 +18,7 @@ from ornithology import (
     track_quantity,
 )
 
-from conftest import config, standup, action, get_test_dir
+from conftest import config, standup, action
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -53,8 +53,7 @@ RESOURCES_AND_INCREMENTS = {"X": {"X0": 1, "X1": 4, "X2": 5, "X3": 9}}
 
 # TODO: obviously won't work on windows...
 @config(params=RESOURCES_AND_INCREMENTS)
-def resources(request):
-    test_dir = get_test_dir(request)
+def resources(request, test_dir):
     resources = request.param
 
     discovery_script = textwrap.dedent(
@@ -94,8 +93,7 @@ def num_resources(resources):
 
 
 @standup
-def condor(request, slot_config):
-    test_dir = get_test_dir(request)
+def condor(test_dir, slot_config):
     with Condor(
         local_dir=test_dir / "condor",
         config={**slot_config, "TEST_DIR": test_dir.as_posix()},
@@ -104,8 +102,7 @@ def condor(request, slot_config):
 
 
 @action
-def handle(request, condor, num_resources):
-    test_dir = get_test_dir(request)
+def handle(test_dir, condor, num_resources):
     handle = condor.submit(
         description={
             "executable": "/bin/sleep",

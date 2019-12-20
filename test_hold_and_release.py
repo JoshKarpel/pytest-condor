@@ -7,7 +7,7 @@ import logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-from conftest import config, standup, action, get_test_dir
+from conftest import config, standup, action
 
 from ornithology import (
     write_file,
@@ -21,8 +21,7 @@ from ornithology import (
 
 
 @action
-def job_queue_events_for_sleep_job(request, default_condor):
-    test_dir = get_test_dir(request)
+def job_queue_events_for_sleep_job(test_dir, default_condor):
     sub_description = """
         executable = /bin/sleep
         arguments = 10

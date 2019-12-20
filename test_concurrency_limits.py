@@ -9,7 +9,7 @@ logger.setLevel(logging.DEBUG)
 
 from ornithology import Condor, SetJobStatus, JobStatus, in_order, track_quantity
 
-from conftest import config, standup, action, get_test_dir
+from conftest import config, standup, action
 
 # the effective number of slots should always be much larger than the number of
 # jobs you plan to submit
@@ -58,8 +58,7 @@ CONCURRENCY_LIMITS = {
 
 
 @standup
-def condor(request, slot_config):
-    test_dir = get_test_dir(request)
+def condor(test_dir, slot_config):
 
     # set all of the concurrency limits for each slot config,
     # so that we can run all the actual job submits against the same config
