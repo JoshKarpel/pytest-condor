@@ -22,6 +22,7 @@ import time
 import functools
 import shlex
 import re
+import textwrap
 
 import htcondor
 
@@ -204,7 +205,7 @@ class Condor:
         param_lines += ["{} = {}".format(k, v) for k, v in self.config.items()]
 
         param_lines += ["#", "# RAW PARAMS", "#"]
-        param_lines += self.raw_config.splitlines()
+        param_lines += textwrap.dedent(self.raw_config).splitlines()
 
         with self.config_file.open(mode="a") as f:
             f.write("\n".join(param_lines))
