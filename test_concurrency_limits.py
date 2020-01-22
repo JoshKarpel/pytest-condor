@@ -59,7 +59,6 @@ CONCURRENCY_LIMITS = {
 
 @standup
 def condor(test_dir, slot_config):
-
     # set all of the concurrency limits for each slot config,
     # so that we can run all the actual job submits against the same config
     concurrency_limit_config = {

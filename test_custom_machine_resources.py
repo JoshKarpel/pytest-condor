@@ -28,8 +28,9 @@ logger.setLevel(logging.DEBUG)
 MONITOR_PERIOD = 5
 NUM_PERIODS = 3
 
+
 # the custom resource is named X
-SLOT_CONFIGS = {
+@config(params = {
     "static_slots": {
         "NUM_CPUS": "16",
         "NUM_SLOTS": "16",
@@ -40,23 +41,22 @@ SLOT_CONFIGS = {
         "STARTD_CRON_X_MONITOR_PERIOD": str(MONITOR_PERIOD),
         "STARTD_CRON_X_MONITOR_METRICS": "SUM:X",
     }
-}
-
-
-@config(params=SLOT_CONFIGS)
+})
 def slot_config(request):
     return request.param
 
 
-RESOURCES_AND_INCREMENTS = {"X": {"X0": 1, "X1": 4, "X2": 5, "X3": 9}}
+@config(params = {
+    "X": {"X0": 1, "X1": 4, "X2": 5, "X3": 9},
+})
+def resources(request):
+    return request.param
 
 
 # TODO: obviously won't work on windows...
-@config(params=RESOURCES_AND_INCREMENTS)
-def resources(request, test_dir):
-    resources = request.param
-
-    discovery_script = textwrap.dedent(
+@config
+def discovery_script(resources):
+    return textwrap.dedent(
         """
         #!/bin/bash
         echo 'DetectedX="{}"'
@@ -65,9 +65,12 @@ def resources(request, test_dir):
             ", ".join(resources.keys())
         )
     )
-    write_file(test_dir / "discovery", discovery_script)
 
-    monitor_script = "#!/bin/bash\n" + "".join(
+
+# TODO: obviously won't work on windows...
+@config
+def monitor_script(resources):
+    return "#!/bin/bash\n" + "".join(
         textwrap.dedent(
             """
             echo 'SlotMergeConstraint = StringListMember( "{}", AssignedX )'
@@ -79,12 +82,6 @@ def resources(request, test_dir):
         )
         for name, increment in resources.items()
     )
-    write_file(test_dir / "monitor", monitor_script)
-
-    logger.debug("Resource discovery script is:{}".format(discovery_script))
-    logger.debug("Resource monitor script is:{}".format(monitor_script))
-
-    return resources
 
 
 @config
@@ -93,10 +90,13 @@ def num_resources(resources):
 
 
 @standup
-def condor(test_dir, slot_config):
+def condor(test_dir, slot_config, discovery_script, monitor_script):
+    write_file(test_dir / "discovery", discovery_script)
+    write_file(test_dir / "monitor", monitor_script)
+
     with Condor(
-        local_dir=test_dir / "condor",
-        config={**slot_config, "TEST_DIR": test_dir.as_posix()},
+        local_dir = test_dir / "condor",
+        config = {**slot_config, "TEST_DIR": test_dir.as_posix()},
     ) as condor:
         yield condor
 
@@ -104,20 +104,20 @@ def condor(test_dir, slot_config):
 @action
 def handle(test_dir, condor, num_resources):
     handle = condor.submit(
-        description={
+        description = {
             "executable": "/bin/sleep",
             "arguments": "17",
-            "request_X": "1",
+            "my.request_X": "1",  # TODO: this seems to be necessary, but shouldn't be
             "log": (test_dir / "events.log").as_posix(),
             "LeaveJobInQueue": "true",
             "job_machine_attrs": "AssignedX",
         },
-        count=num_resources * 2,
+        count = num_resources * 2,
     )
 
     # we must wait for both the handle and the job queue here,
     # because we want to use both later
-    handle.wait(timeout=60, verbose=True)
+    handle.wait(timeout = 60, verbose = True)
     condor.job_queue.wait_for_job_completion(handle.job_ids)
 
     yield handle
@@ -129,12 +129,10 @@ def handle(test_dir, condor, num_resources):
 def num_jobs_running_history(condor, handle, num_resources):
     return track_quantity(
         condor.job_queue.filter(lambda j, e: j in handle.job_ids),
-        increment_condition=lambda id_event: id_event[-1]
-        == SetJobStatus(JobStatus.RUNNING),
-        decrement_condition=lambda id_event: id_event[-1]
-        == SetJobStatus(JobStatus.COMPLETED),
-        max_quantity=num_resources,
-        expected_quantity=num_resources,
+        increment_condition = lambda id_event: id_event[-1] == SetJobStatus(JobStatus.RUNNING),
+        decrement_condition = lambda id_event: id_event[-1] == SetJobStatus(JobStatus.COMPLETED),
+        max_quantity = num_resources,
+        expected_quantity = num_resources,
     )
 
 
@@ -150,10 +148,10 @@ def num_busy_slots_history(startd_log_file, handle, num_resources):
 
     active_claims_history = track_quantity(
         startd_log_file.read(),
-        increment_condition=lambda msg: "Changing activity: Idle -> Busy" in msg,
-        decrement_condition=lambda msg: "Changing activity: Busy -> Idle" in msg,
-        max_quantity=num_resources,
-        expected_quantity=num_resources,
+        increment_condition = lambda msg: "Changing activity: Idle -> Busy" in msg,
+        decrement_condition = lambda msg: "Changing activity: Busy -> Idle" in msg,
+        max_quantity = num_resources,
+        expected_quantity = num_resources,
     )
 
     return active_claims_history
@@ -162,7 +160,7 @@ def num_busy_slots_history(startd_log_file, handle, num_resources):
 class TestCustomMachineResources:
     def test_correct_number_of_resources_assigned(self, condor, num_resources):
         result = condor.status(
-            ad_type=htcondor.AdTypes.Startd, projection=["SlotID", "AssignedX"]
+            ad_type = htcondor.AdTypes.Startd, projection = ["SlotID", "AssignedX"]
         )
 
         # if a slot doesn't have a resource, it simply has no entry in its ad
@@ -172,8 +170,8 @@ class TestCustomMachineResources:
         direct = condor.direct_status(
             htcondor.DaemonTypes.Startd,
             htcondor.AdTypes.Startd,
-            constraint="AssignedX =!= undefined",
-            projection=["SlotID", "AssignedX", "UptimeXSeconds"],
+            constraint = "AssignedX =!= undefined",
+            projection = ["SlotID", "AssignedX", "UptimeXSeconds"],
         )
 
         measured_uptimes = set(int(ad["UptimeXSeconds"]) for ad in direct)
@@ -217,7 +215,7 @@ class TestCustomMachineResources:
         terminated_events = handle.event_log.filter(
             lambda e: e.type is htcondor.JobEventType.JOB_TERMINATED
         )
-        ads = handle.query(projection=["ClusterID", "ProcID", "XUsage"])
+        ads = handle.query(projection = ["ClusterID", "ProcID", "XUsage"])
 
         # make sure we got the right number of terminate events and ads
         # before doing the real assertion
@@ -225,12 +223,12 @@ class TestCustomMachineResources:
 
         jobid_to_usage_via_event = {
             JobID.from_job_event(event): event["XUsage"]
-            for event in sorted(terminated_events, key=lambda e: e.proc)
+            for event in sorted(terminated_events, key = lambda e: e.proc)
         }
 
         jobid_to_usage_via_ad = {
             JobID.from_job_ad(ad): round(ad["XUsage"], 2)
-            for ad in sorted(ads, key=lambda ad: ad["ProcID"])
+            for ad in sorted(ads, key = lambda ad: ad["ProcID"])
         }
 
         logger.debug(
@@ -246,7 +244,7 @@ class TestCustomMachineResources:
 
     def test_reported_usage_in_job_ads_makes_sense(self, handle, resources):
         ads = handle.query(
-            projection=[
+            projection = [
                 "ClusterID",
                 "ProcID",
                 "XUsage",
