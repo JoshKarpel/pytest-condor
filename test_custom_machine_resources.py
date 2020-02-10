@@ -215,7 +215,7 @@ class TestCustomMachineResources:
         terminated_events = handle.event_log.filter(
             lambda e: e.type is htcondor.JobEventType.JOB_TERMINATED
         )
-        ads = handle.query(projection=["ClusterID", "ProcID", "XXXUsage"])
+        ads = handle.query(projection=["ClusterID", "ProcID", "XXXAverageUsage"])
 
         # make sure we got the right number of terminate events and ads
         # before doing the real assertion
@@ -227,7 +227,7 @@ class TestCustomMachineResources:
         }
 
         jobid_to_usage_via_ad = {
-            JobID.from_job_ad(ad): round(ad["XXXUsage"], 2)
+            JobID.from_job_ad(ad): round(ad["XXXAverageUsage"], 2)
             for ad in sorted(ads, key=lambda ad: ad["ProcID"])
         }
 
@@ -248,7 +248,7 @@ class TestCustomMachineResources:
             #     "ClusterID",
             #     "ProcID",
             #     "AssignedXXX",
-            #     "XXXUsage",
+            #     "XXXAverageUsage",
             #     "RemoteWallClockTime",
             # ]
         )
@@ -274,7 +274,7 @@ class TestCustomMachineResources:
         all_options = []
         for ad in ads:
             increment = resources[ad["AssignedXXX"]]
-            usage = fractions.Fraction(float(ad["XXXUsage"])).limit_denominator(30)
+            usage = fractions.Fraction(float(ad["XXXAverageUsage"])).limit_denominator(30)
             print(
                 "Job {}.{}, resource {}, increment {}, usage {} ({})".format(
                     ad["ClusterID"],
@@ -323,6 +323,6 @@ class TestCustomMachineResources:
             all_options.append(exact + dither_periods + extra_period)
 
         assert all(
-            fractions.Fraction(float(ad["XXXUsage"])).limit_denominator(30) in options
+            fractions.Fraction(float(ad["XXXAverageUsage"])).limit_denominator(30) in options
             for ad, options in zip(ads, all_options)
         )
