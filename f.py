@@ -1,14 +1,14 @@
 from conftest import config, standup, action
 
 
-@config(params = {'A': 'A', 'B': 'B'})
+@config(params={"A": "A", "B": "B"})
 def outer(request):
-    return f'outer-{request.param}'
+    return f"outer-{request.param}"
 
 
-@config(params = {'a': 'a', 'b': 'b'})
+@config(params={"a": "a", "b": "b"})
 def inner(request):
-    return f'inner-{request.param}'
+    return f"inner-{request.param}"
 
 
 @standup

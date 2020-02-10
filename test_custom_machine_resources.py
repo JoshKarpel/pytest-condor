@@ -29,26 +29,25 @@ MONITOR_PERIOD = 5
 NUM_PERIODS = 3
 
 
-# the custom resource is named X
-@config(params = {
-    "static_slots": {
-        "NUM_CPUS": "16",
-        "NUM_SLOTS": "16",
-        "MACHINE_RESOURCE_INVENTORY_X": "$(TEST_DIR)/discovery",
-        "STARTD_CRON_X_MONITOR_EXECUTABLE": "$(TEST_DIR)/monitor",
-        "STARTD_CRON_JOBLIST": "$(STARTD_CRON_JOBLIST) X_MONITOR",
-        "STARTD_CRON_X_MONITOR_MODE": "periodic",
-        "STARTD_CRON_X_MONITOR_PERIOD": str(MONITOR_PERIOD),
-        "STARTD_CRON_X_MONITOR_METRICS": "SUM:X",
+@config(
+    params={
+        "static_slots": {
+            "NUM_CPUS": "16",
+            "NUM_SLOTS": "16",
+            "MACHINE_RESOURCE_INVENTORY_XXX": "$(TEST_DIR)/discovery",
+            "STARTD_CRON_XXX_MONITOR_EXECUTABLE": "$(TEST_DIR)/monitor",
+            "STARTD_CRON_JOBLIST": "$(STARTD_CRON_JOBLIST) XXX_MONITOR",
+            "STARTD_CRON_XXX_MONITOR_MODE": "periodic",
+            "STARTD_CRON_XXX_MONITOR_PERIOD": str(MONITOR_PERIOD),
+            "STARTD_CRON_XXX_MONITOR_METRICS": "SUM:XXX",
+        }
     }
-})
+)
 def slot_config(request):
     return request.param
 
 
-@config(params = {
-    "X": {"X0": 1, "X1": 4, "X2": 5, "X3": 9},
-})
+@config(params={"one_resource_type": {"XXX0": 1, "XXX1": 4, "XXX2": 5, "XXX3": 9}})
 def resources(request):
     return request.param
 
@@ -59,7 +58,7 @@ def discovery_script(resources):
     return textwrap.dedent(
         """
         #!/bin/bash
-        echo 'DetectedX="{}"'
+        echo 'DetectedXXX="{}"'
         exit 0
         """.format(
             ", ".join(resources.keys())
@@ -73,11 +72,11 @@ def monitor_script(resources):
     return "#!/bin/bash\n" + "".join(
         textwrap.dedent(
             """
-            echo 'SlotMergeConstraint = StringListMember( "{}", AssignedX )'
-            echo 'UptimeXSeconds = {}'
-            echo '- XSlot{}'
+            echo 'SlotMergeConstraint = StringListMember( "{}", AssignedXXX )'
+            echo 'UptimeXXXSeconds = {}'
+            echo '- {}'
             """.format(
-                name, increment, name.lstrip("X")
+                name, increment, name
             )
         )
         for name, increment in resources.items()
@@ -95,8 +94,8 @@ def condor(test_dir, slot_config, discovery_script, monitor_script):
     write_file(test_dir / "monitor", monitor_script)
 
     with Condor(
-        local_dir = test_dir / "condor",
-        config = {**slot_config, "TEST_DIR": test_dir.as_posix()},
+        local_dir=test_dir / "condor",
+        config={**slot_config, "TEST_DIR": test_dir.as_posix()},
     ) as condor:
         yield condor
 
@@ -104,20 +103,19 @@ def condor(test_dir, slot_config, discovery_script, monitor_script):
 @action
 def handle(test_dir, condor, num_resources):
     handle = condor.submit(
-        description = {
+        description={
             "executable": "/bin/sleep",
             "arguments": "17",
-            "my.request_X": "1",  # TODO: this seems to be necessary, but shouldn't be
+            "request_XXX": "1",
             "log": (test_dir / "events.log").as_posix(),
             "LeaveJobInQueue": "true",
-            "job_machine_attrs": "AssignedX",
         },
-        count = num_resources * 2,
+        count=num_resources * 2,
     )
 
     # we must wait for both the handle and the job queue here,
     # because we want to use both later
-    handle.wait(timeout = 60, verbose = True)
+    handle.wait(timeout=60, verbose=True)
     condor.job_queue.wait_for_job_completion(handle.job_ids)
 
     yield handle
@@ -129,10 +127,12 @@ def handle(test_dir, condor, num_resources):
 def num_jobs_running_history(condor, handle, num_resources):
     return track_quantity(
         condor.job_queue.filter(lambda j, e: j in handle.job_ids),
-        increment_condition = lambda id_event: id_event[-1] == SetJobStatus(JobStatus.RUNNING),
-        decrement_condition = lambda id_event: id_event[-1] == SetJobStatus(JobStatus.COMPLETED),
-        max_quantity = num_resources,
-        expected_quantity = num_resources,
+        increment_condition=lambda id_event: id_event[-1]
+        == SetJobStatus(JobStatus.RUNNING),
+        decrement_condition=lambda id_event: id_event[-1]
+        == SetJobStatus(JobStatus.COMPLETED),
+        max_quantity=num_resources,
+        expected_quantity=num_resources,
     )
 
 
@@ -148,10 +148,10 @@ def num_busy_slots_history(startd_log_file, handle, num_resources):
 
     active_claims_history = track_quantity(
         startd_log_file.read(),
-        increment_condition = lambda msg: "Changing activity: Idle -> Busy" in msg,
-        decrement_condition = lambda msg: "Changing activity: Busy -> Idle" in msg,
-        max_quantity = num_resources,
-        expected_quantity = num_resources,
+        increment_condition=lambda msg: "Changing activity: Idle -> Busy" in msg,
+        decrement_condition=lambda msg: "Changing activity: Busy -> Idle" in msg,
+        max_quantity=num_resources,
+        expected_quantity=num_resources,
     )
 
     return active_claims_history
@@ -160,21 +160,21 @@ def num_busy_slots_history(startd_log_file, handle, num_resources):
 class TestCustomMachineResources:
     def test_correct_number_of_resources_assigned(self, condor, num_resources):
         result = condor.status(
-            ad_type = htcondor.AdTypes.Startd, projection = ["SlotID", "AssignedX"]
+            ad_type=htcondor.AdTypes.Startd, projection=["SlotID", "AssignedXXX"]
         )
 
         # if a slot doesn't have a resource, it simply has no entry in its ad
-        assert len([ad for ad in result if "AssignedX" in ad]) == num_resources
+        assert len([ad for ad in result if "AssignedXXX" in ad]) == num_resources
 
     def test_correct_uptimes_from_monitor(self, condor, resources):
         direct = condor.direct_status(
             htcondor.DaemonTypes.Startd,
             htcondor.AdTypes.Startd,
-            constraint = "AssignedX =!= undefined",
-            projection = ["SlotID", "AssignedX", "UptimeXSeconds"],
+            constraint="AssignedXXX =!= undefined",
+            projection=["SlotID", "AssignedXXX", "UptimeXXXSeconds"],
         )
 
-        measured_uptimes = set(int(ad["UptimeXSeconds"]) for ad in direct)
+        measured_uptimes = set(int(ad["UptimeXXXSeconds"]) for ad in direct)
 
         logger.info(
             "Measured uptimes were {}, expected multiples of {} (not necessarily in order)".format(
@@ -215,20 +215,20 @@ class TestCustomMachineResources:
         terminated_events = handle.event_log.filter(
             lambda e: e.type is htcondor.JobEventType.JOB_TERMINATED
         )
-        ads = handle.query(projection = ["ClusterID", "ProcID", "XUsage"])
+        ads = handle.query(projection=["ClusterID", "ProcID", "XXXUsage"])
 
         # make sure we got the right number of terminate events and ads
         # before doing the real assertion
         assert len(terminated_events) == len(ads) == len(handle)
 
         jobid_to_usage_via_event = {
-            JobID.from_job_event(event): event["XUsage"]
-            for event in sorted(terminated_events, key = lambda e: e.proc)
+            JobID.from_job_event(event): event["XXXUsage"]
+            for event in sorted(terminated_events, key=lambda e: e.proc)
         }
 
         jobid_to_usage_via_ad = {
-            JobID.from_job_ad(ad): round(ad["XUsage"], 2)
-            for ad in sorted(ads, key = lambda ad: ad["ProcID"])
+            JobID.from_job_ad(ad): round(ad["XXXUsage"], 2)
+            for ad in sorted(ads, key=lambda ad: ad["ProcID"])
         }
 
         logger.debug(
@@ -244,23 +244,23 @@ class TestCustomMachineResources:
 
     def test_reported_usage_in_job_ads_makes_sense(self, handle, resources):
         ads = handle.query(
-            projection = [
-                "ClusterID",
-                "ProcID",
-                "XUsage",
-                "MachineAttrAssignedX0",
-                "RemoteWallClockTime",
-            ]
+            # projection=[
+            #     "ClusterID",
+            #     "ProcID",
+            #     "AssignedXXX",
+            #     "XXXUsage",
+            #     "RemoteWallClockTime",
+            # ]
         )
 
-        # here's the deal: XUsage is
+        # Here's the deal: XUsage is
         #
         #   (increment amount * number of periods)
         # -----------------------------------------
         #    (monitor period * number of periods)
         #
-        # BUT in practice, you usually get the monitor period wrong by a second due to rounding
-        # what we observe is that very often, some of increments will be a second longer or shorter
+        # BUT in practice, you usually get the monitor period wrong by a second due to rounding.
+        # What we observe is that very often, some increments will be a second longer or shorter
         # than the increment period. So we could get something like
         #
         #          (increment amount * number of periods)
@@ -273,13 +273,13 @@ class TestCustomMachineResources:
 
         all_options = []
         for ad in ads:
-            increment = resources[ad["MachineAttrAssignedX0"]]
-            usage = fractions.Fraction(float(ad["XUsage"])).limit_denominator(30)
+            increment = resources[ad["AssignedXXX"]]
+            usage = fractions.Fraction(float(ad["XXXUsage"])).limit_denominator(30)
             print(
                 "Job {}.{}, resource {}, increment {}, usage {} ({})".format(
                     ad["ClusterID"],
                     ad["ProcID"],
-                    ad["MachineAttrAssignedX0"],
+                    ad["AssignedXXX"],
                     increment,
                     usage,
                     float(usage),
@@ -323,6 +323,6 @@ class TestCustomMachineResources:
             all_options.append(exact + dither_periods + extra_period)
 
         assert all(
-            fractions.Fraction(float(ad["XUsage"])).limit_denominator(30) in options
+            fractions.Fraction(float(ad["XXXUsage"])).limit_denominator(30) in options
             for ad, options in zip(ads, all_options)
         )

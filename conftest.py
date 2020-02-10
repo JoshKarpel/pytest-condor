@@ -55,7 +55,7 @@ class TestDir:
             shutil.rmtree(dir)
 
         ALREADY_SEEN.add(dir)
-        dir.mkdir(parents = True, exist_ok = True)
+        dir.mkdir(parents=True, exist_ok=True)
 
         self._path = dir
 
@@ -130,7 +130,7 @@ class TestDir:
 TEST_DIR = TestDir()
 
 
-@pytest.fixture(scope = "class")
+@pytest.fixture(scope="class")
 def test_dir():
     return TEST_DIR
 
@@ -155,15 +155,15 @@ def _add_config_ids(func, params):
     CONFIG_IDS[func.__module__] |= params.keys()
 
 
-def config(*args, params = None):
+def config(*args, params=None):
     def decorator(func):
         _check_params(params)
         _add_config_ids(func, params)
         return pytest.fixture(
-            scope = "module",
-            autouse = True,
-            params = params.values() if params is not None else None,
-            ids = params.keys() if params is not None else None,
+            scope="module",
+            autouse=True,
+            params=params.values() if params is not None else None,
+            ids=params.keys() if params is not None else None,
         )(func)
 
     if len(args) == 1:
@@ -174,9 +174,7 @@ def config(*args, params = None):
 
 def standup(*args):
     def decorator(func):
-        return pytest.fixture(
-            scope = "class",
-        )(func)
+        return pytest.fixture(scope="class")(func)
 
     if len(args) == 1:
         return decorator(args[0])
@@ -184,14 +182,14 @@ def standup(*args):
     return decorator
 
 
-def action(*args, params = None):
+def action(*args, params=None):
     _check_params(params)
 
     def decorator(func):
         return pytest.fixture(
-            scope = "class",
-            params = params.values() if params is not None else None,
-            ids = params.keys() if params is not None else None,
+            scope="class",
+            params=params.values() if params is not None else None,
+            ids=params.keys() if params is not None else None,
         )(func)
 
     if len(args) == 1:
@@ -202,5 +200,5 @@ def action(*args, params = None):
 
 @standup
 def default_condor(test_dir):
-    with Condor(local_dir = test_dir / "condor") as condor:
+    with Condor(local_dir=test_dir / "condor") as condor:
         yield condor
