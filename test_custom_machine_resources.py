@@ -274,7 +274,9 @@ class TestCustomMachineResources:
         all_options = []
         for ad in ads:
             increment = resources[ad["AssignedXXX"]]
-            usage = fractions.Fraction(float(ad["XXXAverageUsage"])).limit_denominator(30)
+            usage = fractions.Fraction(float(ad["XXXAverageUsage"])).limit_denominator(
+                30
+            )
             print(
                 "Job {}.{}, resource {}, increment {}, usage {} ({})".format(
                     ad["ClusterID"],
@@ -323,6 +325,7 @@ class TestCustomMachineResources:
             all_options.append(exact + dither_periods + extra_period)
 
         assert all(
-            fractions.Fraction(float(ad["XXXAverageUsage"])).limit_denominator(30) in options
+            fractions.Fraction(float(ad["XXXAverageUsage"])).limit_denominator(30)
+            in options
             for ad, options in zip(ads, all_options)
         )

@@ -4,11 +4,7 @@
 
 import logging
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-
 import htcondor
-
 
 from conftest import config, standup, action
 
@@ -22,6 +18,9 @@ from ornithology import (
     JobStatus,
     in_order,
 )
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 
 @standup
@@ -56,7 +55,7 @@ def max_materialize(request):
 def jobids_for_sleep_jobs(test_dir, condor, max_idle, max_materialize):
     sub_description = """
         executable = /bin/sleep
-        arguments = 3
+        arguments = 10
 
         request_memory = 1MB
         request_disk = 1MB
@@ -64,9 +63,11 @@ def jobids_for_sleep_jobs(test_dir, condor, max_idle, max_materialize):
         max_materialize = {max_materialize}
         max_idle = {max_idle}
 
-        queue 5
+        queue {q}
     """.format(
-        max_materialize=max_materialize, max_idle=max_idle
+        max_materialize=max_materialize,
+        max_idle=max_idle,
+        q=max_materialize + max_idle + 1,
     )
     submit_file = write_file(test_dir / "queue.sub", sub_description)
 

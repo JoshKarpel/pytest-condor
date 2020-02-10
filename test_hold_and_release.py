@@ -4,9 +4,6 @@
 
 import logging
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-
 from conftest import config, standup, action
 
 from ornithology import (
@@ -18,6 +15,9 @@ from ornithology import (
     JobStatus,
     in_order,
 )
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 
 @action
