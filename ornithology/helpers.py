@@ -17,10 +17,10 @@ from typing import Any, Iterable
 
 import logging
 
+import itertools
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
-
-import itertools
 
 
 def in_order(items: Iterable[Any], expected) -> bool:

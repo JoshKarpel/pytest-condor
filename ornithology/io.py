@@ -15,12 +15,11 @@
 
 import logging
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-
 import textwrap
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 # TODO: does this way of doing permissions work on Windows?
 def write_file(path: Path, text: str, permissions: int = 0o777) -> Path:
